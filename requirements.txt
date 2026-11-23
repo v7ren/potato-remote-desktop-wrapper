@@ -1,0 +1,4 @@
+pywebview>=5
+PySide6-Essentials>=6.5  # stream toolbar (optional: streams still work without it)
+# build only
+pyinstaller>=6

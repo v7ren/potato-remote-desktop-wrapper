@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Solinear</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#262a33; --text:#e8eaef; --dim:#8a90a0; --accent:#6c8cff; --ok:#3ecf8e; --warn:#f0b44c; --err:#ff6b6b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text); font:15px/1.45 "Segoe UI Variable","Segoe UI",system-ui,sans-serif; padding:28px 24px; user-select:none; }
+  h1 { font-size:22px; font-weight:600; letter-spacing:-.01em; }
+  .sub { color:var(--dim); margin-top:4px; }
+  section { margin-top:28px; }
+  button { font:inherit; border:0; border-radius:10px; padding:11px 18px; cursor:pointer; background:var(--accent); color:#fff; font-weight:600; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .wide { width:100%; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; display:flex; align-items:center; gap:12px; margin-top:10px; }
+  .card .grow { flex:1; min-width:0; }
+  .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta { color:var(--dim); font-size:13px; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:1px; }
+  .row { display:flex; justify-content:space-between; align-items:center; }
+  select { font:inherit; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 8px; }
+  .label { color:var(--dim); font-size:13px; text-transform:uppercase; letter-spacing:.06em; }
+  .ready { color:var(--ok); font-weight:600; }
+  #toast { position:fixed; left:24px; right:24px; bottom:20px; background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px 14px; opacity:0; transform:translateY(8px); transition:.2s; pointer-events:none; }
+  #toast.show { opacity:1; transform:none; }
+  .hidden { display:none; }
+  @media (prefers-reduced-motion: reduce) { #toast { transition:none; } }
+</style>
+</head>
+<body>
+  <h1>Solinear</h1>
+  <p class="sub" id="who">Starting…</p>
+
+  <section id="signin" class="hidden">
+    <p class="sub">Sign in once. Use the same account on every device.</p>
+    <button class="wide" id="signinBtn" style="margin-top:14px">Sign in</button>
+  </section>
+
+  <section id="main" class="hidden">
+    <div id="hostBox"></div>
+
+    <div class="row" style="margin-top:28px">
+      <span class="label">Your PCs</span>
+    </div>
+    <div id="hosts" aria-live="polite"><p class="meta" style="margin-top:10px">Looking for your PCs…</p></div>
+
+    <div class="label" style="margin-top:28px">Stream settings</div>
+    <div class="card" style="flex-direction:column; align-items:stretch; gap:10px">
+      <label class="row">Quality
+        <select id="quality" class="setting">
+          <option value="auto">Auto</option>
+          <option value="smoother">Smoother</option>
+          <option value="sharper">Sharper</option>
+        </select>
+      </label>
+      <label class="row">Window
+        <select id="display_mode" class="setting">
+          <option value="borderless">Borderless fullscreen</option>
+          <option value="fullscreen">Fullscreen</option>
+          <option value="windowed">Windowed</option>
+        </select>
+      </label>
+      <label class="row">Reverse scroll wheel
+        <input type="checkbox" id="reverse_scroll" class="setting">
+      </label>
+      <label class="row" title="On a Mac streaming a Windows PC, Cmd works as Ctrl (Cmd+C copies) and Option+Tab switches apps. On a Windows PC streaming a Mac, Ctrl works as Cmd.">Match my keyboard's shortcuts
+        <input type="checkbox" id="match_keys" class="setting">
+      </label>
+    </div>
+    <details class="meta" style="margin-top:10px">
+      <summary style="cursor:pointer">Shortcuts during a stream</summary>
+      <p style="margin-top:6px"><b id="mod">Ctrl+Alt+Shift</b> plus:</p>
+      <p>X: switch fullscreen / window<br>F1–F12: show host screen 1–12<br>S: stats · Z: release mouse · Q: quit</p>
+    </details>
+  </section>
+
+  <div id="toast" role="status"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let api;
+
+  function toast(msg) {
+    const t = $("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 4000);
+  }
+
+  function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+  async function refresh() {
+    const s = await api.state();
+    if (s.error) toast(s.error);
+    if (s.missing.length) {
+      $("signin").classList.add("hidden"); $("main").classList.add("hidden");
+      $("who").textContent = `Install ${s.missing.join(" and ")} first, then reopen Solinear.`;
+      return s;
+    }
+    $("signin").classList.toggle("hidden", s.signed_in);
+    $("main").classList.toggle("hidden", !s.signed_in);
+    $("who").textContent = s.signed_in ? `This device: ${s.name}` : "Stream your PCs anywhere.";
+    const macNote = s.mac ? `<div class="meta" style="margin-top:6px">If macOS asks for Screen Recording and Accessibility, allow both, then reopen Solinear.</div>` : "";
+    $("hostBox").innerHTML = !s.can_host
+      ? (s.mac ? `<p class="meta">To stream this Mac too, install Sunshine (<code>brew tap LizardByte/homebrew && brew install sunshine</code>) and reopen Solinear.</p>` : "")
+      : s.is_host
+      ? `<div class="card"><div class="grow"><div class="ready">✓ This ${s.mac ? "Mac" : "PC"} is ready to stream</div><div class="meta">Sign in on another device with the same account.</div>${macNote}</div></div>`
+      : `<button class="ghost wide" id="hostBtn">Let me stream this PC</button>`;
+    if (!s.is_host && $("hostBtn")) $("hostBtn").onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = "Setting up…";
+      try { await api.make_host(); } catch (err) { toast("Setup failed: " + err); }
+      refresh();
+    };
+    return s;
+  }
+
+  async function loadHosts() {
+    const list = await api.hosts();
+    $("hosts").innerHTML = list.length ? "" :
+      `<p class="meta" style="margin-top:10px">No PCs found yet. Open Solinear on your gaming PC and choose “Let me stream this PC”.</p>`;
+    for (const h of list) {
+      const el = document.createElement("div");
+      el.className = "card";
+      const badge = h.direct ? `<span class="dot" style="background:var(--ok)"></span>Direct` : `<span class="dot" style="background:var(--warn)"></span>Relayed`;
+      el.innerHTML = `<div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${badge}${h.ms != null ? " · " + h.ms + " ms" : ""}</div></div><button>Play</button>`;
+      el.querySelector("button").onclick = async (e) => {
+        e.target.disabled = true; e.target.textContent = "Connecting…";
+        try {
+          const r = await api.play(h.ip, h.name);
+          if (!r.ok) toast(r.error);
+        } catch (err) { toast("Couldn't start the stream: " + err); }
+        e.target.disabled = false; e.target.textContent = "Play";
+      };
+      $("hosts").appendChild(el);
+    }
+  }
+
+  $("signinBtn").onclick = async () => {
+    $("signinBtn").disabled = true; $("signinBtn").textContent = "Finish in your browser…";
+    try { await api.sign_in(); } catch (err) { toast("Sign-in failed: " + err); }
+    const wait = setInterval(async () => {
+      const s = await refresh();
+      if (s.signed_in) { clearInterval(wait); loadHosts(); }
+    }, 1500);
+  };
+
+  async function loadSettings(isMac) {
+    const st = await api.settings();
+    $("quality").value = st.quality; $("display_mode").value = st.display_mode; $("reverse_scroll").checked = st.reverse_scroll;
+    $("match_keys").checked = st.match_keys;
+    if (isMac) $("mod").textContent = "Ctrl+Option+Shift";
+    document.querySelectorAll(".setting").forEach(el => el.onchange = () =>
+      api.save_settings($("quality").value, $("display_mode").value, $("reverse_scroll").checked, $("match_keys").checked));
+  }
+
+  window.addEventListener("pywebviewready", async () => {
+    api = window.pywebview.api;
+    const s = await refresh();
+    loadSettings(s.mac);
+    if (s.signed_in) loadHosts();
+    setInterval(() => { refresh(); if (!$("main").classList.contains("hidden")) loadHosts(); }, 15000);
+  });
+</script>
+</body>
+</html>
