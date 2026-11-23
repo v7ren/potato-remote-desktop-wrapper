@@ -1,0 +1,65 @@
+<!-- Solinear MSI (WiX 5). Built by build.py from dist/msi/ (the app + a clean copy of bin/). -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:fw="http://wixtoolset.org/schemas/v4/wxs/firewall"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  <Package Name="Solinear" Manufacturer="Solinear" Version="0.1.0" Scope="perMachine"
+           UpgradeCode="6F3C2B1E-8D4A-4C7B-9E21-5A0D7C3F9B42">
+    <MajorUpgrade DowngradeErrorMessage="A newer Solinear is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <Icon Id="app.ico" SourceFile="dist\msi\Solinear.exe" />
+    <Property Id="ARPPRODUCTICON" Value="app.ico" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Solinear" />
+    </StandardDirectory>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="Firewall" />
+      <ComponentRef Id="StartMenu" />
+    </Feature>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="dist\msi\**" />
+    </ComponentGroup>
+
+    <!-- streaming and pairing ports reachable only from the Tailscale network -->
+    <Component Id="Firewall" Directory="INSTALLFOLDER" Guid="3A1B7C52-0E9D-4F61-8B2A-6C4D9E0F1A73">
+      <RegistryValue Root="HKLM" Key="Software\Solinear" Name="firewall" Value="1" Type="integer" KeyPath="yes" />
+      <fw:FirewallException Id="FwApollo" Name="Solinear Apollo" Program="[INSTALLFOLDER]bin\apollo\sunshine.exe">
+        <fw:RemoteAddress Value="100.64.0.0/10" />
+      </fw:FirewallException>
+      <fw:FirewallException Id="FwAgent" Name="Solinear Agent" Program="[INSTALLFOLDER]Solinear.exe">
+        <fw:RemoteAddress Value="100.64.0.0/10" />
+      </fw:FirewallException>
+      <fw:FirewallException Id="FwNet" Name="Solinear Net" Program="[INSTALLFOLDER]bin\tailscale\tailscaled.exe" Scope="any" />
+    </Component>
+
+    <!-- the shortcut runs the elevated task, so users never see a UAC prompt -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenu" Guid="9C2E4D81-7B3F-4A05-A6E1-2F8D0B5C7E94">
+        <Shortcut Id="StartMenuShortcut" Name="Solinear" Target="[System64Folder]schtasks.exe"
+                  Arguments="/run /tn Solinear" Icon="app.ico" />
+        <RegistryValue Root="HKLM" Key="Software\Solinear" Name="shortcut" Value="1" Type="integer" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <!-- start elevated at logon (tailscaled needs admin for its network adapter). PowerShell rather than
+         schtasks: schtasks defaults stop the task on battery and after 72 h, which breaks laptops -->
+    <SetProperty Id="CreateTask" Sequence="execute" Before="CreateTask"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -Command &quot;$a = New-ScheduledTaskAction -Execute '[INSTALLFOLDER]Solinear.exe'; $t = New-ScheduledTaskTrigger -AtLogOn; $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0; $p = New-ScheduledTaskPrincipal -GroupId 'BUILTIN\Users' -RunLevel Highest; Register-ScheduledTask -TaskName Solinear -Action $a -Trigger $t -Settings $s -Principal $p -Force; Start-ScheduledTask -TaskName Solinear&quot;" />
+    <CustomAction Id="CreateTask" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <SetProperty Id="RemoveTask" Sequence="execute" Before="RemoveTask"
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -Command &quot;Get-Process Solinear,sunshine,tailscaled -ErrorAction SilentlyContinue | Where-Object Path -like '[INSTALLFOLDER]*' | Stop-Process -Force; Unregister-ScheduledTask -TaskName Solinear -Confirm:$false -ErrorAction SilentlyContinue&quot;" />
+    <CustomAction Id="RemoveTask" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- before files are removed/replaced, so a running copy doesn't lock them (also on upgrade) -->
+      <Custom Action="RemoveTask" Before="RemoveFiles" Condition="Installed" />
+      <Custom Action="CreateTask" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

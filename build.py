@@ -1,6 +1,6 @@
 """Build Solinear with PyInstaller.
 
-Windows: dist/Solinear/ plus the installer via Inno Setup (if `iscc` is on PATH).
+Windows: dist/Solinear/ plus dist/Solinear.msi via WiX 5 (dotnet tool install --global wix --version 5.0.2).
   Put the upstream releases in bin/ first (they are not committed):
     bin/tailscale/  tailscale.exe, tailscaled.exe, wintun.dll   (from a Tailscale Windows release)
     bin/apollo/     sunshine.exe + its assets                    (Apollo Windows build)
@@ -30,7 +30,17 @@ subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--windowed"
 
 if MAC:
     print("dist/Solinear.app is ready (unsigned: first launch needs right-click > Open).")
-elif shutil.which("iscc"):
-    subprocess.run(["iscc", str(ROOT / "installer.iss")], cwd=ROOT, check=True)
 else:
-    print("Inno Setup (iscc) not found; skipped the installer. dist/Solinear/ is ready.")
+    # dist/msi = the app + bin/, minus this machine's Moonlight identity (Moonlight.ini holds its private key)
+    stage = ROOT / "dist" / "msi"
+    shutil.rmtree(stage, ignore_errors=True)
+    shutil.copytree(ROOT / "dist" / "Solinear", stage)
+    shutil.copytree(ROOT / "bin", stage / "bin", ignore=shutil.ignore_patterns(
+        "Moonlight Game Streaming Project", "*.log", "cache", "portable.dat"))
+    wix = shutil.which("wix") or str(Path.home() / ".dotnet" / "tools" / "wix.exe")
+    if Path(wix).exists():
+        subprocess.run([wix, "build", "installer.wxs", "-arch", "x64", "-ext", "WixToolset.Util.wixext",
+                        "-ext", "WixToolset.Firewall.wixext", "-o", "dist/Solinear.msi"], cwd=ROOT, check=True)
+        print("dist/Solinear.msi is ready.")
+    else:
+        print("WiX not found (dotnet tool install --global wix --version 5.0.2); dist/msi/ is ready.")

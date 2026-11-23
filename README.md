@@ -24,15 +24,19 @@ The app uses its own ports, so it doesn't clash with a Tailscale, Moonlight, Sun
 
 ## Windows
 
-### Option A: download (no Python needed)
+### Option A: installer (recommended)
 
-1. Download `Solinear-windows-x64.zip` from [Releases](../../releases) and unzip it anywhere.
-2. Run `Solinear\Solinear.exe`. If you don't already have Tailscale running, Windows asks for admin rights; that's needed for the network adapter.
+1. Download `Solinear.msi` from [Releases](../../releases) and run it. It isn't code-signed yet, so Windows SmartScreen may warn: click **More info → Run anyway**.
+2. Solinear starts right away, and again each time you log in, with no admin prompts. The installer also adds firewall rules that only allow your Tailscale network.
 3. Click **Sign in** and log in in the browser that opens.
 4. On the PC you want to stream **from**, click **Let me stream this PC**.
 5. On the device you want to stream **to**, click **Play** next to that PC.
 
-Windows Firewall may ask about `Solinear.exe` or `sunshine.exe` the first time. Allow them.
+Uninstall from **Settings → Apps**.
+
+### Option A2: portable zip
+
+Download `Solinear-windows-x64.zip`, unzip it anywhere, and run `Solinear\Solinear.exe`. If you don't already have Tailscale running, Windows asks for admin rights; that's needed for the network adapter. Windows Firewall may ask about `Solinear.exe` or `sunshine.exe` the first time. Allow them.
 
 ### Option B: from source
 
@@ -62,7 +66,13 @@ python -m solinear.main
 python build.py
 ```
 
-This makes `dist\Solinear\Solinear.exe`. Copy `bin\` next to it. If [Inno Setup](https://jrsoftware.org/isinfo.php) (`iscc`) is on your PATH, it also builds `dist\SolinearSetup.exe`. The installer starts Solinear at login and adds firewall rules limited to your Tailscale network.
+This makes `dist\Solinear\Solinear.exe`, plus `dist\Solinear.msi` if [WiX 5](https://wixtoolset.org) is installed:
+
+```powershell
+dotnet tool install --global wix --version 5.0.2
+wix extension add -g WixToolset.Util.wixext/5.0.2
+wix extension add -g WixToolset.Firewall.wixext/5.0.2
+```
 
 ## Mac
 
