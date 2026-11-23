@@ -78,6 +78,18 @@ class ServerIdPinned(unittest.TestCase):
         host.pin_server_id(cfg)
         self.assertEqual(json.loads(self.state.read_text())["root"]["uniqueid"], first)
 
+    def test_stringified_device_fields_restored(self):
+        # what `sunshine.exe --creds` leaves behind once devices are paired
+        dev = {"name": "Mac", "uuid": "U1", "cert": "C", "display_mode": "", "perm": "119480064",
+               "allow_client_commands": "true", "always_use_virtual_display": "false"}
+        self.state.write_text(json.dumps({"root": {"uniqueid": "ABC-1", "named_devices": [dev]}}))
+        host.pin_server_id({})
+        d = json.loads(self.state.read_text())["root"]["named_devices"][0]
+        self.assertIs(d["allow_client_commands"], True)
+        self.assertIs(d["always_use_virtual_display"], False)
+        self.assertEqual(d["perm"], 119480064)
+        self.assertEqual((d["name"], d["display_mode"]), ("Mac", ""))
+
     def test_existing_server_id_adopted(self):
         self.state.write_text(json.dumps({"root": {"uniqueid": "ABC-1", "named_devices": []}}))
         cfg = {}
@@ -158,6 +170,16 @@ class PairingAgent(unittest.TestCase):
         req = urllib.request.Request(self.url + "/pair", json.dumps(body).encode(), {"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=3) as r:
             return json.load(r)
+
+    def test_second_agent_on_same_port_refused(self):
+        # a second Solinear must not start hosting next to the first (it would start a second Apollo)
+        orig = host.AGENT_PORT
+        host.AGENT_PORT = self.server.server_address[1]
+        try:
+            with self.assertRaises(OSError):
+                host.serve("127.0.0.1", host.make_handler("o", lambda ip: None, None, {}))
+        finally:
+            host.AGENT_PORT = orig
 
     def test_info(self):
         with urllib.request.urlopen(self.url + "/info", timeout=3) as r:

@@ -9,6 +9,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 from . import client, host, store, tailnet
@@ -61,6 +62,17 @@ class Api:
             host.setup(self._cfg)  # self-heal: rewrite config and login before each start
             self._server = host.start_apollo()
             self._children.append(self._server)
+            threading.Thread(target=self._keep_server_up, daemon=True).start()
+
+    def _keep_server_up(self):
+        """Apollo/Sunshine can exit on their own (e.g. started while the PC is locked: no display to capture).
+        Without this, the host stays "not answering" until Solinear is restarted."""
+        while True:
+            time.sleep(5)
+            with self._lock:
+                if self._server.poll() is not None:
+                    self._server = host.start_apollo()
+                    self._children.append(self._server)
 
     def _set_keys(self, client_os) -> bool:
         """Switch the server's key remap for the connecting client; restarts the server if it changed.

@@ -7,6 +7,7 @@ import json
 import re
 import secrets
 import shutil
+import socket
 import ssl
 import subprocess
 import threading
@@ -97,10 +98,18 @@ def pin_server_id(cfg: dict) -> None:
     except FileNotFoundError:
         data = {}
     root = data.setdefault("root", {})
+    # `--creds` rewrites this file with every value as a string ("true", "119480064"), and Apollo then
+    # crashes reading its paired devices ("type must be boolean, but is string"). Put the types back.
+    for dev in root.get("named_devices", []):
+        for k, v in dev.items():
+            if v in ("true", "false"):
+                dev[k] = v == "true"
+            elif k == "perm" and isinstance(v, str) and v.isdigit():
+                dev[k] = int(v)
     if root.get("uniqueid"):
         cfg["server_id"] = root["uniqueid"]
-        return
-    root["uniqueid"] = cfg.setdefault("server_id", str(uuid.uuid4()).upper())
+    else:
+        root["uniqueid"] = cfg.setdefault("server_id", str(uuid.uuid4()).upper())
     state.write_text(json.dumps(data, indent=4), "utf-8")
 
 
@@ -296,7 +305,18 @@ def make_handler(owner: str, whois, submit, info, on_paired=lambda name: None, c
     return Handler
 
 
+class _ExclusiveServer(ThreadingHTTPServer):
+    # Python's default SO_REUSEADDR lets a second Solinear bind the same port on Windows and start a second
+    # Apollo next to the first. Fail instead, so only one copy ever hosts.
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows only
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(ip: str, handler) -> ThreadingHTTPServer:
-    server = ThreadingHTTPServer((ip, AGENT_PORT), handler)  # bound to the Tailscale IP only
+    server = _ExclusiveServer((ip, AGENT_PORT), handler)  # bound to the Tailscale IP only
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
