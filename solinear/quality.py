@@ -26,6 +26,14 @@ def screen() -> tuple[int, int, int]:
     return w, h, hz if hz > 1 else 60
 
 
+def fit(host_w: int, host_h: int, client_w: int, client_h: int) -> tuple[int, int]:
+    """Stream at the host screen's shape. Without a virtual display the host can't switch to the client's
+    shape (a 3:2 Mac on a 16:9 PC), so the server pads the picture and absolute mouse positions land off
+    target, more so toward the edges. Shrink to fit the client screen; never upscale. Even sizes for the encoder."""
+    k = min(1.0, client_w / host_w, client_h / host_h)
+    return int(host_w * k) // 2 * 2, int(host_h * k) // 2 * 2
+
+
 def bitrate_kbps(w: int, h: int, fps: int, direct: bool, quality: str = "auto") -> int:
     kbps = w * h * fps * 0.16 / 1000 * SCALE.get(quality, 1.0)  # ~20 Mbps at 1080p60
     if not direct:

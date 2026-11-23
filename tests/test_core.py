@@ -32,6 +32,12 @@ class Quality(unittest.TestCase):
     def test_relay_capped(self):
         self.assertEqual(quality.bitrate_kbps(3840, 2160, 120, False), quality.RELAY_CAP)
 
+    def test_fit_keeps_host_shape(self):
+        self.assertEqual(quality.fit(1920, 1080, 3024, 1964), (1920, 1080))  # Retina Mac on a 1080p PC
+        self.assertEqual(quality.fit(3840, 2160, 1920, 1200), (1920, 1080))  # 4K host, smaller laptop
+        w, h = quality.fit(2560, 1600, 1366, 768)
+        self.assertTrue(w <= 1366 and h <= 768 and w % 2 == 0 and h % 2 == 0)
+
     def test_display_mode_and_scroll_flags(self):
         f = quality.flags(1920, 1080, 60, 20000)
         self.assertEqual(f[f.index("--display-mode") + 1], "borderless")

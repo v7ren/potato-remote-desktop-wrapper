@@ -227,7 +227,8 @@ def screens() -> list[dict]:
             from AppKit import NSScreen
 
             return [{"w": int(s.frame().size.width * s.backingScaleFactor()),
-                     "h": int(s.frame().size.height * s.backingScaleFactor())} for s in NSScreen.screens()]
+                     "h": int(s.frame().size.height * s.backingScaleFactor()), "primary": i == 0}
+                    for i, s in enumerate(NSScreen.screens())]  # the first is the menu-bar screen
         import ctypes
         from ctypes import wintypes
 
@@ -238,7 +239,7 @@ def screens() -> list[dict]:
 
         def cb(_mon, _hdc, rect, _data):
             r = rect.contents
-            out.append({"w": r.right - r.left, "h": r.bottom - r.top})
+            out.append({"w": r.right - r.left, "h": r.bottom - r.top, "primary": r.left == 0 and r.top == 0})
             return 1
 
         ctypes.windll.user32.EnumDisplayMonitors(None, None, proc(cb), 0)

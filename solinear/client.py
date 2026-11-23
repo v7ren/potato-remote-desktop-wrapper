@@ -137,6 +137,13 @@ def stream(ip: str, choice: str = "auto", display_mode: str = "borderless", reve
     """size/fps override the client's own screen (toolbar choices); None = match this screen."""
     match_keys(ip)
     sw, sh, sfps = quality.screen()
+    if size is None:
+        # match the host screen's shape (see quality.fit). shortcut: assumes the primary screen is streamed;
+        # after switching to a differently shaped screen from the toolbar, pick a resolution there.
+        screens = (_info({"ip": ip}) or {}).get("screens") or []
+        main = next((x for x in screens if x.get("primary")), screens[0] if screens else None)
+        if main:
+            size = quality.fit(main["w"], main["h"], sw, sh)
     w, h = size or (sw, sh)
     fps = fps or sfps
     direct, _ = tailnet.ping(ip)
