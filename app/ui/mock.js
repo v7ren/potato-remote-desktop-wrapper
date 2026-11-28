@@ -4,13 +4,17 @@
   let st = { signed_in: false, account: "ren@example.com", device_name: "Ren-MacBook", is_host: false, can_host: true, mac: false, missing: [], error: null };
   let settings = { quality: "auto", display_mode: "borderless", reverse_scroll: false, match_keys: true };
   const hosts = [
-    { name: "Ren-pc", ip: "100.64.0.2", os: "windows", online: true, direct: true, ms: 12,
+    { name: "Ren-pc", ip: "100.64.0.2", os: "windows", online: true, direct: true, ms: 12, this_device: true,
       screens: [{ id: "\\\\.\\DISPLAY1", name: "Display 1", w: 2560, h: 1440, primary: true }, { id: "\\\\.\\DISPLAY2", name: "Display 2", w: 1920, h: 1080, primary: false }] },
     { name: "Studio Mac", ip: "100.64.0.3", os: "mac", online: false, direct: false, ms: null, screens: [{ id: "1", name: "Built-in", w: 3024, h: 1964, primary: true }] },
   ];
   const q = new URLSearchParams(location.search);
   if (q.has("signedin")) st.signed_in = true;
   if (q.has("empty")) hosts.length = 0;
+  if (q.has("mac")) st.mac = true;
+  if (q.has("host")) st.is_host = true;
+  const page = q.get("page");   // preview a page: ?signedin&page=thispc
+  if (page) addEventListener("load", () => document.querySelector(`.nav[data-page="${page}"]`)?.click());
   const wait = (ms, v) => new Promise(r => setTimeout(() => r(v), ms));
   const cmds = {
     state: () => ({ ...st }),
@@ -21,6 +25,7 @@
     settings: () => settings,
     save_settings: (s) => (settings = s),
     play: async ({ name }) => { await wait(1500); return name === "Studio Mac" ? { ok: false, error: "Studio Mac isn't reachable." } : { ok: true, error: null }; },
+    fwd: ({ name, args }) => (cmds[name] ? cmds[name](args) : null),   // the toolbar process forwards every call
     toolbar_info: () => ({ name: "Ren-pc", ip: "100.64.0.2", os: new URLSearchParams(location.search).get("os") || "windows", screens: hosts[0].screens, current_screen: "\\\\.\\DISPLAY1",
       opts: { quality: "auto", size: null, fps: null, hdr: false, display_mode: "borderless" } }),
   };

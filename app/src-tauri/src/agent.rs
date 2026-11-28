@@ -1,5 +1,6 @@
 //! Host agent: the pairing/control HTTP endpoint. Only devices signed in to the owner's account may pair,
-//! trigger host actions, or change keyboard/screen. Bound to the Tailscale IP only.
+//! trigger host actions, or change keyboard/screen. Behind the network helper it listens on loopback only and
+//! learns the caller's login from the helper's headers, trusted only with the per-run secret.
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::Arc;
@@ -29,6 +30,8 @@ pub struct Agent {
     pub owner: String,
     pub whois: Arc<dyn Whois>,
     pub hooks: Arc<dyn Hooks>,
+    /// Set when the helper fronts us: then only a request carrying this secret has a known caller.
+    pub secret: Option<String>,
 }
 
 fn err(code: u16, msg: &str) -> (u16, Value) {
@@ -36,14 +39,15 @@ fn err(code: u16, msg: &str) -> (u16, Value) {
 }
 
 impl Agent {
-    pub fn handle(&self, method: &str, path: &str, peer: &str, body: &[u8]) -> (u16, Value) {
+    /// `login`: the caller's tailnet login, None if unknown.
+    pub fn handle(&self, method: &str, path: &str, peer: &str, login: Option<&str>, body: &[u8]) -> (u16, Value) {
         if method == "GET" && path == "/info" {
             return (200, self.hooks.info());
         }
         if method != "POST" || !["/pair", "/cancel", "/action", "/keys", "/screen"].contains(&path) {
             return err(404, "not found");
         }
-        if self.owner.is_empty() || self.whois.whois(peer).as_deref() != Some(&self.owner) {
+        if self.owner.is_empty() || !login.is_some_and(|l| l.eq_ignore_ascii_case(&self.owner)) {
             return err(403, "This device is signed in to a different account.");
         }
         if path == "/cancel" {
@@ -122,7 +126,14 @@ pub fn serve(addr: &str, agent: Arc<Agent>) -> std::io::Result<Running> {
                 let mut body = Vec::new();
                 let _ = req.as_reader().take(4097).read_to_end(&mut body);
                 let peer = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-                let (code, v) = agent.handle(req.method().as_str(), req.url(), &peer, &body);
+                let header = |n: &str| req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(n)).map(|h| h.value.as_str().to_string());
+                let login = match &agent.secret {
+                    // never trust loopback itself: any local program can connect here
+                    Some(s) => (header("X-Solinear-Secret").as_deref() == Some(s.as_str()))
+                        .then(|| header("X-Solinear-Login")).flatten().filter(|l| !l.is_empty()),
+                    None => agent.whois.whois(&peer),
+                };
+                let (code, v) = agent.handle(req.method().as_str(), req.url(), &peer, login.as_deref(), &body);
                 let h = tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap();
                 let _ = req.respond(tiny_http::Response::from_string(v.to_string()).with_status_code(code).with_header(h));
             });
@@ -178,7 +189,7 @@ mod tests {
     impl T {
         fn new() -> T {
             let fake = Arc::new(Fake { login: Mutex::new(Some("owner@gmail.com".into())), log: Mutex::new(vec![]) });
-            let agent = Arc::new(Agent { owner: "owner@gmail.com".into(), whois: fake.clone(), hooks: fake.clone() });
+            let agent = Arc::new(Agent { owner: "owner@gmail.com".into(), whois: fake.clone(), hooks: fake.clone(), secret: None });
             T { fake, run: serve("127.0.0.1:0", agent).unwrap() }
         }
 
@@ -201,7 +212,7 @@ mod tests {
     fn second_agent_on_same_port_refused() {
         let t = T::new();
         let fake = t.fake.clone();
-        let agent = Arc::new(Agent { owner: "o".into(), whois: fake.clone(), hooks: fake });
+        let agent = Arc::new(Agent { owner: "o".into(), whois: fake.clone(), hooks: fake, secret: None });
         assert!(serve(&format!("127.0.0.1:{}", t.run.port), agent).is_err());
     }
 
@@ -278,5 +289,28 @@ mod tests {
     #[test]
     fn unknown_path_404() {
         assert_eq!(T::new().post("/nope", json!({})).0, 404);
+    }
+
+    #[test]
+    fn behind_helper_only_the_secret_makes_a_caller_known() {
+        let fake = Arc::new(Fake { login: Mutex::new(Some("owner@gmail.com".into())), log: Mutex::new(vec![]) });
+        let agent = Arc::new(Agent { owner: "owner@gmail.com".into(), whois: fake.clone(), hooks: fake.clone(), secret: Some("s3cret".into()) });
+        let run = serve("127.0.0.1:0", agent).unwrap();
+        let post = |hs: &[(&str, &str)]| {
+            let a: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+            let mut r = a.post(format!("http://127.0.0.1:{}/action", run.port));
+            for (k, v) in hs {
+                r = r.header(*k, *v);
+            }
+            r.send_json(json!({"action": "lock"})).unwrap().status().as_u16()
+        };
+        // whois would say "owner", but loopback is never trusted on its own
+        assert_eq!(post(&[]), 403);
+        assert_eq!(post(&[("X-Solinear-Login", "owner@gmail.com")]), 403);
+        assert_eq!(post(&[("X-Solinear-Login", "owner@gmail.com"), ("X-Solinear-Secret", "wrong")]), 403);
+        assert_eq!(post(&[("X-Solinear-Login", "other@gmail.com"), ("X-Solinear-Secret", "s3cret")]), 403);
+        assert_eq!(post(&[("X-Solinear-Login", ""), ("X-Solinear-Secret", "s3cret")]), 403);
+        assert_eq!(post(&[("X-Solinear-Login", "Owner@Gmail.com"), ("X-Solinear-Secret", "s3cret")]), 200);
+        assert_eq!(fake.log.lock().unwrap().clone(), vec!["lock".to_string()]);
     }
 }

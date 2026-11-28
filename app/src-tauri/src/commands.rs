@@ -2,7 +2,7 @@
 //! through `net::Net`.
 use crate::admin;
 use crate::agent::{self, Agent, Hooks};
-use crate::apollo::{self, AGENT_PORT};
+use crate::apollo;
 use crate::moonlight::{self, Opts};
 use crate::net::{Net, Status};
 use crate::screens::{self, Screen};
@@ -18,6 +18,8 @@ use tauri::Emitter;
 struct Session {
     id: u64,
     ip: String,
+    /// Where Moonlight connects (the helper's local forwarder to `ip`).
+    addr: String,
     name: String,
     os: String,
     screens: Vec<Screen>,
@@ -146,6 +148,7 @@ impl App {
             let _ = o.kill();
         }
         self.server.stop();
+        self.net.stop();
     }
 
     /// Loopback endpoint the toolbar process forwards its commands to (see overlay.rs). Started on first use.
@@ -223,15 +226,19 @@ impl App {
         }
         let (Some(login), Some(ip)) = (me.login.clone(), me.ip.clone()) else { return Err("Not signed in.".into()) };
         let hooks = HostHooks { app: self.clone(), name: me.name.clone().unwrap_or_default() };
-        let agent = Arc::new(Agent { owner: login, whois: self.net.clone(), hooks: Arc::new(hooks) });
+        let secret = uuid::Uuid::new_v4().simple().to_string();
+        let bind = self.net.agent_bind(&ip);
+        let agent = Arc::new(Agent { owner: login.clone(), whois: self.net.clone(), hooks: Arc::new(hooks), secret: Some(secret.clone()) });
         // raises if the port is taken (another copy is hosting); the server isn't started then
-        *slot = Some(agent::serve(&format!("{ip}:{AGENT_PORT}"), agent).map_err(err)?);
+        *slot = Some(agent::serve(&bind, agent).map_err(err)?);
         let mut cfg = self.cfg.lock().unwrap().clone(); // self-heal: rewrite config and login before each start
-        let up = apollo::setup(&mut cfg).and_then(|_| self.server.start());
+        let up = apollo::setup(&mut cfg).and_then(|_| self.server.start()).map_err(err)
+            .and_then(|_| self.net.host(true, &login, &bind, &secret));
         match up {
             Ok(()) => *self.cfg.lock().unwrap() = cfg,
             Err(e) => {
                 *slot = None;
+                self.server.stop();
                 return Err(format!("Couldn't start hosting: {e}"));
             }
         }
@@ -287,6 +294,7 @@ impl App {
             *self.cfg.lock().unwrap() = cfg;
             self.start_hosting(&me)?;
         } else {
+            let _ = self.net.host(false, "", "", "");
             *self.agent.lock().unwrap() = None;
             self.server.stop();
             self.save_cfg(|c| {
@@ -299,10 +307,14 @@ impl App {
 
     // --- playing ---
     pub fn hosts(self: &Arc<Self>) -> R {
-        let peers = self.net.peers()?;
+        let peers: Vec<_> = self.net.peers()?.into_iter().filter(|p| p.online).collect();
+        // shortcut: matched by computer name, so another PC with the same name would be marked too; rare for one owner
+        let me = moonlight::tailnet_name(&moonlight::hostname());
+        let me = me.as_str(); // &str: copied into each thread below
         let found: Vec<Value> = std::thread::scope(|s| {
             let jobs: Vec<_> = peers.iter().map(|p| s.spawn(move || {
-                let mut info = moonlight::agent_info(&p.ip)?;
+                let mut info = moonlight::agent_info(&*self.net, &p.ip)?;
+                info["screens"] = json!(screens::from_info(&info)); // every screen gets an id the UI can pick
                 let (direct, ms) = self.net.ping(&p.ip).unwrap_or((false, None));
                 info["ip"] = p.ip.clone().into();
                 info["online"] = true.into();
@@ -311,6 +323,8 @@ impl App {
                 if info["name"].is_null() {
                     info["name"] = p.name.clone().into();
                 }
+                // this PC's own installed Tailscale (our helper is a separate node, e.g. "ren-1")
+                info["this_device"] = (p.name == me).into();
                 Some(info)
             })).collect();
             jobs.into_iter().filter_map(|j| j.join().ok().flatten()).collect()
@@ -341,27 +355,35 @@ impl App {
     }
 
     pub fn play(self: &Arc<Self>, ip: String, name: String, screen: Option<String>) -> R {
-        if !moonlight::wait_for_server(&ip, Duration::from_secs(20)) {
+        let net = &*self.net;
+        let addr = match net.connect(&ip) {
+            Ok(a) => a,
+            Err(e) => return Self::fail(&format!("Couldn't reach that PC: {e}")),
+        };
+        if !moonlight::wait_for_server(&addr, Duration::from_secs(20)) {
             return Self::fail("That PC's streaming server isn't answering. Is Solinear open on it?");
         }
-        if !moonlight::is_paired(&ip) {
-            match moonlight::pair(&ip) {
+        if !moonlight::is_paired(&addr) {
+            match moonlight::pair(net, &ip, &addr) {
                 Ok(true) => {}
                 Ok(false) => return Self::fail("Couldn't pair with that PC. Is Solinear open on it?"),
                 Err(e) => return Self::fail(&e),
             }
         }
         let cfg = self.cfg.lock().unwrap().clone();
-        moonlight::match_keys(&ip, cfg.get("match_keys").and_then(Value::as_bool).unwrap_or(true));
-        let info = moonlight::agent_info(&ip).unwrap_or(Value::Null);
-        let screens: Vec<Screen> = serde_json::from_value(info["screens"].clone()).unwrap_or_default();
+        moonlight::match_keys(net, &ip, &addr, cfg.get("match_keys").and_then(Value::as_bool).unwrap_or(true));
+        let info = moonlight::agent_info(net, &ip).unwrap_or(Value::Null);
+        let screens = screens::from_info(&info);
         let chosen = screen.as_ref().and_then(|id| screens.iter().find(|s| &s.id == id))
             .or_else(|| screens.iter().find(|s| s.primary)).or(screens.first()).cloned();
-        if let (Some(_), Some(c)) = (&screen, &chosen) {
-            if let Ok((200, v)) = moonlight::agent_post(&ip, "/screen", json!({"id": c.id})) {
+        // an older host can only switch live, once the stream is up (see below)
+        let live = chosen.as_ref().filter(|c| screen.is_some() && screens::live_only(&c.id) && !c.primary)
+            .and_then(|c| screens.iter().position(|s| s.id == c.id)).filter(|n| *n < 12);
+        if let (Some(_), Some(c)) = (&screen, chosen.as_ref().filter(|c| !screens::live_only(&c.id))) {
+            if let Ok((200, v)) = moonlight::agent_post(net, &ip, "/screen", json!({"id": c.id})) {
                 if v["restarted"] == true {
                     std::thread::sleep(Duration::from_secs(1));
-                    moonlight::wait_for_server(&ip, Duration::from_secs(20));
+                    moonlight::wait_for_server(&addr, Duration::from_secs(20));
                 }
             }
         }
@@ -371,13 +393,35 @@ impl App {
         if let Some(mut old) = slot.take() {
             let _ = old.child.kill();
         }
-        let child = moonlight::stream(&ip, &opts, direct).map_err(err)?;
+        let started = std::time::SystemTime::now();
+        let child = moonlight::stream(&addr, &opts, direct).map_err(err)?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         *slot = Some(Session {
-            id, ip, name, os: info["os"].as_str().unwrap_or("windows").into(), screens,
+            id, ip, addr, name, os: info["os"].as_str().unwrap_or("windows").into(), screens,
             current_screen: chosen.map(|c| c.id).unwrap_or_default(), opts, child,
         });
         drop(slot);
+        if let Some(n) = live {
+            // shortcut: position n in the host's list is assumed to be its server's F<n+1> display (true for
+            // Windows' usual monitor order); upgrade the host to the new app for exact ids
+            let app = self.clone();
+            std::thread::spawn(move || {
+                // keys pressed before the video arrives are lost: wait for it (about 5s, longer while pairing)
+                if !moonlight::wait_until_streaming(started, Duration::from_secs(60)) {
+                    return;
+                }
+                for _ in 0..5 {
+                    std::thread::sleep(Duration::from_secs(1));
+                    let pid = match app.session.lock().unwrap().as_ref() {
+                        Some(s) if s.id == id => s.child.id(),
+                        _ => return,
+                    };
+                    if moonlight::send_combo(pid, &format!("f{}", n + 1)).is_ok() {
+                        return;
+                    }
+                }
+            });
+        }
         self.spawn_overlay();
         let app = self.clone();
         std::thread::spawn(move || loop {
@@ -388,6 +432,7 @@ impl App {
                     if s.child.try_wait().ok().flatten().is_some() {
                         *g = None;
                         drop(g);
+                        app.net.disconnect();
                         app.emit("stream-ended", ()); // the toolbar window closes itself on this
                         break;
                     }
@@ -424,7 +469,7 @@ impl App {
         let _ = s.child.kill();
         let _ = s.child.wait();
         let direct = self.net.ping(&s.ip).map(|p| p.0).unwrap_or(false);
-        s.child = moonlight::stream(&s.ip, &s.opts, direct).map_err(err)?;
+        s.child = moonlight::stream(&s.addr, &s.opts, direct).map_err(err)?;
         Ok(())
     }
 
@@ -452,20 +497,21 @@ impl App {
         let cur = s.screens.iter().find(|x| x.id == s.current_screen);
         let slot = s.screens.iter().position(|x| x.id == id).filter(|n| *n < 12);
         if let (Some(cur), Some(n)) = (cur, slot) {
-            if cur.id != id && (cur.w, cur.h) == (screen.w, screen.h) {
+            // older hosts (no /screen) can only switch live, whatever the size
+            if cur.id != id && ((cur.w, cur.h) == (screen.w, screen.h) || screens::live_only(&id)) {
                 moonlight::send_combo(s.child.id(), &format!("f{}", n + 1))?;
                 s.current_screen = id;
                 return Ok(Self::info_of(s));
             }
         }
         let _ = s.child.kill(); // the host's server restarts on a screen change and would drop it anyway
-        let (code, v) = moonlight::agent_post(&s.ip, "/screen", json!({"id": id}))?;
+        let (code, v) = moonlight::agent_post(&*self.net, &s.ip, "/screen", json!({"id": id}))?;
         if code != 200 {
             return Err(v["error"].as_str().unwrap_or("The host refused.").into());
         }
         if v["restarted"] == true {
             std::thread::sleep(Duration::from_secs(1));
-            moonlight::wait_for_server(&s.ip, Duration::from_secs(20));
+            moonlight::wait_for_server(&s.addr, Duration::from_secs(20));
         }
         let (cw, ch, _) = quality::screen();
         s.opts.size = quality::fit(screen.w, screen.h, cw, ch);
@@ -476,7 +522,7 @@ impl App {
 
     pub fn toolbar_action(self: &Arc<Self>, name: String) -> R {
         let ip = self.with_session(|s| Ok(s.ip.clone()))?;
-        let (code, v) = moonlight::agent_post(&ip, "/action", json!({"action": name}))?;
+        let (code, v) = moonlight::agent_post(&*self.net, &ip, "/action", json!({"action": name}))?;
         if code != 200 {
             return Err(v["error"].as_str().unwrap_or("The host refused.").into());
         }
@@ -486,6 +532,7 @@ impl App {
     pub fn toolbar_end(self: &Arc<Self>) -> R {
         if let Some(mut s) = self.session.lock().unwrap().take() {
             let _ = s.child.kill();
+            self.net.disconnect();
         }
         Ok(json!({"ok": true}))
     }
@@ -526,7 +573,7 @@ mod tests {
 
     #[test]
     fn toolbar_endpoint_needs_its_token_and_reports_no_stream() {
-        let app = App::new(Arc::new(crate::net::Stub));
+        let app = App::new(Arc::new(crate::net::Stub("no helper".into())));
         let (port, token) = app.ctl_start();
         let post = |tok: &str, path: &str| {
             let a: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();

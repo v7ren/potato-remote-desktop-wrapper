@@ -58,8 +58,15 @@ New: `POST /screen {"id": "\\\\.\\DISPLAY2"}` -> sets `output_name` in sunshine.
 changed -> `{"status": true, "restarted": bool}`. `/info.screens[].id` is the Apollo `output_name`
 (Windows `\\.\DISPLAYn` as printed by `bin/apollo/tools/dxgi-info.exe`; Mac: CGDirectDisplayID).
 
-The owner check: the caller's Tailscale login must equal the host's own login. How the caller's login is
-known depends on the network layer (pending spike): code it behind `net::Whois`.
+The owner check: the caller's Tailscale login must equal the host's own login (case-insensitive). The agent
+listens on `127.0.0.1:57980` only; the helper's tailnet proxy sets `X-Solinear-Login` and `X-Solinear-Secret`, and
+the login counts only when the secret matches this run's random one. Loopback alone is never trusted.
+
+Older (Python) hosts: `/info` screens have no `id`. The app gives them `#<n>` (main screen first) and switches
+those live with Ctrl+Alt+Shift+F<n+1> once Moonlight's log shows the first video packet.
+
+Moonlight runs with its own portable folder (`<data dir>/moonlight`), `mdns=false`, and learned host
+addresses cleared before each run, so it streams through the helper's `[::1]` forwarder.
 
 ## Ports
 Apollo base 57989 (HTTPS 57984, web 57990, RTSP 58010 TCP; video 57998, control 57999, audio 58000 UDP).
@@ -94,4 +101,4 @@ Every control request needs `Authorization: Bearer <token>`, else 401. Errors: `
 | `POST /host {enabled, owner, agent, secret}` | `{ok: true}`. Enabled: listens on the tailnet on TCP 57984/57989/57990/58010 and UDP 57998/57999/58000/58002, forwarding each to `127.0.0.1:<same port>`; peers whose login is not `owner` (case-insensitive; whois cached 60s per IP) are dropped. Also tailnet TCP 57980 = reverse proxy to `agent` (`host:port`) that deletes incoming `X-Solinear-*` headers and sets `X-Solinear-Login` (caller login, or empty) and `X-Solinear-Secret`. Non-owners are NOT blocked there: the agent decides (403). UDP: one local socket per remote ip:port, 60s idle timeout. `enabled:false` closes everything. Fails (500) if not on the tailnet yet or a port is taken |
 | `POST /connect {ip}` | `{ok: true}`: client side. Listens on `[::1]` (IPv6 only, so a local Apollo holding the IPv4 ports does not clash) on the same TCP/UDP ports and forwards over the tailnet to `<ip>:<same port>`. Replaces the previous target. Point Moonlight at `[::1]:57989` |
 | `POST /disconnect` | `{ok: true}` |
-| `ANY /peer/<ip>/agent/<path...>` | proxies method, query, body and Content-Type to `http://<ip>:57980/<path>` through tsnet, 10s timeout; returns the agent's status and body (502 `{error}` if unreachable) |
+| `ANY /peer/<ip>/agent/<path...>` | proxies method, query, body and Content-Type to `http://<ip>:57980/<path>` through tsnet, 30s timeout (a host restarting its server takes up to 20s); returns the agent's status and body (502 `{error}` if unreachable) |

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -447,9 +448,15 @@ func (a *app) routes() http.Handler {
 		if r.URL.RawQuery != "" {
 			u += "?" + r.URL.RawQuery
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
-		req, _ := http.NewRequestWithContext(ctx, r.Method, u, r.Body)
+		// buffered, so the request carries a Content-Length: older (Python) agents ignore chunked bodies
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		if err != nil {
+			writeJSON(w, 400, map[string]any{"error": "bad body"})
+			return
+		}
+		req, _ := http.NewRequestWithContext(ctx, r.Method, u, bytes.NewReader(body))
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			req.Header.Set("Content-Type", ct)
 		}

@@ -24,8 +24,13 @@ fn main() {
     if hosting && !admin::is_admin() && admin::relaunch_elevated() {
         return;
     }
-    // the real network helper replaces net::Stub later
-    let app = App::new(Arc::new(net::Stub));
+    // started only now: an elevated relaunch above must not leave a second helper on the same state dir
+    let login_server = store::load().get("login_server").and_then(|v| v.as_str()).map(String::from);
+    let net: Arc<dyn net::Net> = match net::Helper::start(login_server.as_deref()) {
+        Ok(h) => Arc::new(h),
+        Err(e) => Arc::new(net::Stub(e)),
+    };
+    let app = App::new(net);
     let exit = app.clone();
     let setup = app.clone();
     tauri::Builder::default()

@@ -1,10 +1,12 @@
 //! Client side: find the owner's hosts, pair with them, start the stream. Moonlight's own UI never opens.
-use crate::apollo::{AGENT_PORT, BASE_PORT};
+//! Two addresses per host: `ip` (tailnet IP, for its agent, reached through `Net`) and `addr` (what Moonlight
+//! connects to: the local forwarder from `Net::connect`).
+use crate::apollo::BASE_PORT;
+use crate::net::Net;
 use crate::screens::Screen;
 use crate::store::{self, Cfg, MAC};
 use crate::quality;
 use serde_json::{json, Value};
-use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
@@ -18,13 +20,41 @@ pub fn exe() -> PathBuf {
     }
 }
 
-/// Portable mode looks for its settings in the cwd, so Moonlight always runs with cwd = its folder.
+/// Portable mode keeps its settings in the cwd: our own folder, so pairings and learned addresses aren't shared
+/// with any other Moonlight (including the old Solinear's copy).
 fn cwd() -> Option<PathBuf> {
-    (!MAC).then(|| store::bin().join("moonlight"))
+    (!MAC).then(|| store::data_dir().join("moonlight"))
+}
+
+/// Moonlight tries every address it knows for a host and streams over whichever answers first, which may skip
+/// our forwarder (a LAN or another Tailscale's address). So: no network discovery, and each run starts with only
+/// the address we give it. shortcut: it can still learn the host's own LocalIP from serverinfo during a run;
+/// such an address only answers when that path works anyway.
+pub fn only_given_addresses(ini: &str) -> String {
+    let mut out: Vec<String> = vec![];
+    let mut mdns = false;
+    for line in ini.lines() {
+        let key = line.split_once('=').map_or("", |(k, _)| k);
+        if key == "mdns" {
+            mdns = true;
+            out.push("mdns=false".into());
+        } else if ["localaddress", "remoteaddress", "ipv6address"].iter().any(|k| key.ends_with(&format!("\\{k}"))) {
+            out.push(format!("{key}="));
+        } else {
+            out.push(line.into());
+        }
+    }
+    if !mdns {
+        match out.iter().position(|l| l == "[General]") {
+            Some(i) => out.insert(i + 1, "mdns=false".into()),
+            None => out.splice(0..0, ["[General]".to_string(), "mdns=false".into()]).for_each(drop),
+        }
+    }
+    out.join("\n") + "\n"
 }
 
 fn addr(ip: &str) -> String {
-    format!("{ip}:{BASE_PORT}")
+    if ip.contains(':') { format!("[{ip}]:{BASE_PORT}") } else { format!("{ip}:{BASE_PORT}") }
 }
 
 pub fn list_args(ip: &str) -> Vec<String> {
@@ -43,32 +73,32 @@ fn command(args: &[String]) -> Command {
     let mut c = Command::new(exe());
     c.args(args);
     if let Some(d) = cwd() {
+        let _ = std::fs::create_dir_all(d.join("Moonlight Game Streaming Project"));
         let _ = std::fs::write(d.join("portable.dat"), "");
+        let ini = d.join("Moonlight Game Streaming Project/Moonlight.ini");
+        let _ = std::fs::write(&ini, only_given_addresses(&std::fs::read_to_string(&ini).unwrap_or_default()));
         c.current_dir(d);
     }
     c
 }
 
 // --- talking to a host's agent ------------------------------------------------------------------------------
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder().http_status_as_error(false).timeout_global(Some(Duration::from_secs(20))).build().into()
+/// (status code, body). Err = host unreachable. 30s: /keys and /cancel may restart the host's server.
+pub fn agent_post(net: &dyn Net, ip: &str, path: &str, body: Value) -> Result<(u16, Value), String> {
+    net.agent("POST", ip, path, Some(body), Duration::from_secs(30))
 }
 
-/// (status code, body). Err = host unreachable.
-pub fn agent_post(ip: &str, path: &str, body: Value) -> Result<(u16, Value), String> {
-    let mut r = agent().post(format!("http://{ip}:{AGENT_PORT}{path}")).send_json(body).map_err(|e| e.to_string())?;
-    Ok((r.status().as_u16(), r.body_mut().read_json().unwrap_or(Value::Null)))
-}
-
-pub fn agent_info(ip: &str) -> Option<Value> {
-    let a: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(Duration::from_millis(1500))).build().into();
-    a.get(format!("http://{ip}:{AGENT_PORT}/info")).call().ok()?.body_mut().read_json().ok()
+pub fn agent_info(net: &dyn Net, ip: &str) -> Option<Value> {
+    match net.agent("GET", ip, "/info", None, Duration::from_secs(3)) {
+        Ok((200, v)) if v.is_object() => Some(v),
+        _ => None,
+    }
 }
 
 // --- pairing ------------------------------------------------------------------------------------------------
-pub fn is_paired(ip: &str) -> bool {
+pub fn is_paired(addr: &str) -> bool {
     // moonlight's pair/stream always exit 0; `list` is the only honest check
-    let mut c = command(&list_args(ip));
+    let mut c = command(&list_args(addr));
     let Ok(mut child) = store::quiet(&mut c).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return false };
     let end = Instant::now() + Duration::from_secs(40);
     while Instant::now() < end {
@@ -83,11 +113,13 @@ pub fn is_paired(ip: &str) -> bool {
 }
 
 /// The host's streaming server takes a few seconds to (re)start; don't hand Moonlight a closed port.
-pub fn wait_for_server(ip: &str, timeout: Duration) -> bool {
-    let Ok(sa) = format!("{ip}:{BASE_PORT}").parse::<SocketAddr>() else { return false };
+/// An HTTP answer, not a TCP connect: the local forwarder accepts connections even while the host is down.
+pub fn wait_for_server(addr: &str, timeout: Duration) -> bool {
+    let a: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).timeout_global(Some(Duration::from_secs(3))).build().into();
+    let url = format!("http://{}/serverinfo", self::addr(addr));
     let end = Instant::now() + timeout;
     while Instant::now() < end {
-        if TcpStream::connect_timeout(&sa, Duration::from_secs(2)).is_ok() {
+        if a.get(&url).call().is_ok() {
             return true;
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -97,27 +129,28 @@ pub fn wait_for_server(ip: &str, timeout: Duration) -> bool {
 
 /// Ask the host to remap keys for this device's keyboard (Mac Cmd+C -> Ctrl+C on Windows, and back). The host
 /// restarts its server when the mapping changes, so wait for it before Moonlight connects.
-pub fn match_keys(ip: &str, on: bool) {
+pub fn match_keys(net: &dyn Net, ip: &str, addr: &str, on: bool) {
     let client_os = if !on { "" } else if MAC { "mac" } else { "windows" };
-    if let Ok((200, v)) = agent_post(ip, "/keys", json!({"client_os": client_os})) {
+    if let Ok((200, v)) = agent_post(net, ip, "/keys", json!({"client_os": client_os})) {
         if v["restarted"] == true {
             std::thread::sleep(Duration::from_secs(1));
-            wait_for_server(ip, Duration::from_secs(20));
+            wait_for_server(addr, Duration::from_secs(20));
         }
     } // older host without /keys: stream without the remap
 }
 
-pub fn pair(ip: &str) -> Result<bool, String> {
+pub fn pair(net: &dyn Net, ip: &str, addr: &str) -> Result<bool, String> {
     let pin = format!("{:04}", rand::random::<u32>() % 10_000);
-    let _ = agent_post(ip, "/cancel", json!({})); // a Sunshine host refuses a new pairing (409) while an old one is pending
-    let mut c = command(&pair_args(ip, &pin));
+    let _ = agent_post(net, ip, "/cancel", json!({})); // a Sunshine host refuses a new pairing (409) while an old one is pending
+    wait_for_server(addr, Duration::from_secs(20)); // a Windows host restarts its server on /cancel
+    let mut c = command(&pair_args(addr, &pin));
     let mut child = c.spawn().map_err(|e| e.to_string())?;
     let end = Instant::now() + Duration::from_secs(30); // room for a first-time macOS "Allow incoming connections?" prompt
     let mut ok = false;
     let mut res = Ok(());
     while Instant::now() < end && matches!(child.try_wait(), Ok(None)) && !ok {
         std::thread::sleep(Duration::from_millis(500)); // the server rejects the PIN until moonlight's request is pending
-        match agent_post(ip, "/pair", json!({"pin": pin, "name": hostname()})) {
+        match agent_post(net, ip, "/pair", json!({"pin": pin, "name": hostname()})) {
             Ok((200, v)) => ok = v["status"] == true,
             Ok((403, _)) => {
                 res = Err("That PC belongs to a different account.".to_string());
@@ -132,15 +165,20 @@ pub fn pair(ip: &str) -> Result<bool, String> {
             std::thread::sleep(Duration::from_millis(200));
         }
     } else {
-        let _ = agent_post(ip, "/cancel", json!({})); // don't leave a request that blocks the next try for 5 min
+        let _ = agent_post(net, ip, "/cancel", json!({})); // don't leave a request that blocks the next try for 5 min
     }
     let _ = child.kill();
     res?;
-    Ok(is_paired(ip))
+    Ok(is_paired(addr))
 }
 
-fn hostname() -> String {
+pub fn hostname() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "device".into())
+}
+
+/// The tailnet name this computer gets from its name (Tailscale's DNS label rules), e.g. "Ren-PC" -> "ren-pc".
+pub fn tailnet_name(computer: &str) -> String {
+    computer.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>().trim_matches('-').into()
 }
 
 // --- streaming ----------------------------------------------------------------------------------------------
@@ -167,10 +205,33 @@ pub fn default_opts(cfg: &Cfg, screen: Option<&Screen>) -> Opts {
     }
 }
 
-pub fn stream(ip: &str, o: &Opts, direct: bool) -> std::io::Result<Child> {
+pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<Child> {
     let kbps = quality::bitrate_kbps(o.size.0, o.size.1, o.fps, direct, &o.quality);
     let flags = quality::flags(o.size.0, o.size.1, o.fps, kbps, &o.display_mode, o.reverse_scroll, o.hdr);
-    command(&stream_args(ip, flags)).spawn()
+    command(&stream_args(addr, flags)).spawn()
+}
+
+/// True once the stream started by now (`since`) shows video, per Moonlight's log in our folder.
+pub fn wait_until_streaming(since: std::time::SystemTime, timeout: Duration) -> bool {
+    let Some(dir) = cwd() else {
+        std::thread::sleep(Duration::from_secs(8)); // shortcut: Mac's Moonlight logs elsewhere; a fixed wait for now
+        return true;
+    };
+    let end = Instant::now() + timeout;
+    while Instant::now() < end {
+        let logs = std::fs::read_dir(&dir).into_iter().flatten().flatten().filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("Moonlight-") && n.ends_with(".log")
+                && e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= since)
+        });
+        for e in logs {
+            if std::fs::read_to_string(e.path()).is_ok_and(|t| t.contains("Received first video packet")) {
+                return true;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    false
 }
 
 /// "f1".."f12" -> 0..11
@@ -206,8 +267,21 @@ pub fn send_combo(pid: u32, key: &str) -> Result<(), String> {
     let mut found = (pid, None);
     unsafe {
         let _ = EnumWindows(Some(find), LPARAM(&mut found as *mut _ as isize));
-        if let Some(h) = found.1 {
-            let _ = SetForegroundWindow(h);
+        // no stream window (yet): don't press the combo into whatever app is in front
+        let h = found.1.ok_or("The stream window isn't open.")?;
+        // Windows refuses focus changes from background programs; sharing the front window's input queue lets us
+        let front = GetForegroundWindow();
+        let front_thread = GetWindowThreadProcessId(front, None);
+        let me = windows::Win32::System::Threading::GetCurrentThreadId();
+        let attached = front_thread != me && windows::Win32::System::Threading::AttachThreadInput(me, front_thread, true).as_bool();
+        let _ = SetForegroundWindow(h);
+        let _ = BringWindowToTop(h);
+        if attached {
+            let _ = windows::Win32::System::Threading::AttachThreadInput(me, front_thread, false);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        if GetForegroundWindow() != h {
+            return Err("Couldn't bring the stream window to the front.".into());
         }
     }
     std::thread::sleep(Duration::from_millis(50));
@@ -246,8 +320,24 @@ mod tests {
     }
 
     #[test]
+    fn moonlight_keeps_only_given_addresses() {
+        let ini = "[General]\nmdns=true\nwidth=1920\n[hosts]\n1\\hostname=Ren\n1\\localaddress=100.1.2.3\n1\\remoteaddress=49.2.3.4\n1\\manualaddress=::1\n";
+        assert_eq!(only_given_addresses(ini),
+                   "[General]\nmdns=false\nwidth=1920\n[hosts]\n1\\hostname=Ren\n1\\localaddress=\n1\\remoteaddress=\n1\\manualaddress=::1\n");
+        assert_eq!(only_given_addresses(""), "[General]\nmdns=false\n");
+        assert_eq!(only_given_addresses("[General]\nx=1"), "[General]\nmdns=false\nx=1\n");
+    }
+
+    #[test]
+    fn tailnet_names() {
+        assert_eq!(tailnet_name("REN"), "ren");
+        assert_eq!(tailnet_name("Ren's PC"), "ren-s-pc");
+    }
+
+    #[test]
     fn argv() {
         assert_eq!(list_args("100.1.2.3"), ["list", "100.1.2.3:57989"]);
+        assert_eq!(list_args("::1"), ["list", "[::1]:57989"]); // the helper's local forwarder
         assert_eq!(pair_args("100.1.2.3", "0420"), ["pair", "100.1.2.3:57989", "--pin", "0420"]);
         let s = stream_args("100.1.2.3", quality::flags(1920, 1080, 60, 20000, "borderless", false, false));
         assert_eq!(&s[..4], ["stream", "100.1.2.3:57989", "Desktop", "--resolution"]);

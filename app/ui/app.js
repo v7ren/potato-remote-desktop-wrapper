@@ -16,12 +16,15 @@ function h(tag, attrs, ...kids) {
   return el;
 }
 const icon = (id) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.innerHTML = `<use href="#${id}"/>`; s.setAttribute("aria-hidden", "true"); return s; };
+const pad2 = (n) => String(n).padStart(2, "0");
 
 function toast(msg) {
-  const t = h("div.toast", {}, String(msg));
+  const t = h("div.toast", {}, h("span.led.on"), String(msg));
   $("toasts").append(t);
   setTimeout(() => t.remove(), 4500);
 }
+function banner(msg) { $("bannerText").textContent = msg; $("banner").hidden = !msg; }
+$("bannerX").onclick = () => banner("");
 
 let S = null;                 // last state
 let hostUi = new Map();       // ip -> {screen, busy, error}: survives re-renders
@@ -29,10 +32,18 @@ let hostSig = "";
 let signing = false;          // waiting for the browser sign-in
 let pollTimer = null;
 
+// ---------- pages ----------
+function go(page) {
+  for (const b of document.querySelectorAll(".nav"))
+    b.dataset.page === page ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
+  for (const s of document.querySelectorAll(".page")) s.hidden = s.id !== "page-" + page;
+}
+for (const b of document.querySelectorAll(".nav")) b.onclick = () => go(b.dataset.page);
+
 // ---------- state ----------
 async function refresh() {
   try { S = await invoke("state"); } catch (e) { toast("Couldn't read state: " + e); return; }
-  if (S.error) toast(S.error);
+  if (S.error) banner(S.error);
   const needs = S.missing && S.missing.length;
   const signedIn = S.signed_in && !needs;
   if (signedIn) signing = false;
@@ -40,44 +51,60 @@ async function refresh() {
   $("app").hidden = !signedIn;
   if (!signedIn) {
     $("welcomeText").textContent = needs ? `Install ${S.missing.join(" and ")} first, then reopen Solinear.`
-      : "Stream your PCs anywhere. Sign in once, then use the same account on every device.";
+      : "Sign in once, then use the same account on every device.";
     $("signinBtn").hidden = !!needs;
     $("signinBtn").disabled = signing;
-    $("signinBtn").textContent = signing ? "Finish in your browser…" : "Sign in";
+    $("signinHint").hidden = !signing;
     return;
   }
-  $("acct").textContent = S.account || "Signed in";
+  const acct = S.account || "Signed in";
+  $("acct").textContent = acct;
+  $("acct").title = acct;
+  $("avatar").textContent = acct.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "··";
   $("mod").textContent = S.mac ? "Ctrl+Option+Shift" : "Ctrl+Alt+Shift";
-  renderHostRow();
+  renderThisPc();
   loadHosts();
 }
 
-function renderHostRow() {
+function renderThisPc() {
   const kind = S.mac ? "Mac" : "PC";
-  $("hostTitle").textContent = `Stream this ${kind}`;
-  $("hostSub").textContent = S.is_host ? `This ${kind} is ready. Sign in on another device with the same account.` : `Let your other devices play on this ${kind}.`;
-  $("hostRow").classList.toggle("on", !!S.is_host);
+  $("navThis").textContent = `This ${kind}`;
+  $("thisTitle").textContent = `THIS ${kind.toUpperCase()}`;
+  $("hostTitle").textContent = `Let my other devices stream this ${kind}`;
+  $("deviceName").textContent = S.device_name || "";
   const sw = $("hostSwitch");
   sw.setAttribute("aria-checked", String(!!S.is_host));
   sw.disabled = !S.can_host;
+  const on = !!S.is_host;
+  $("hostStatus").textContent = !S.can_host ? "Not available" : on ? "Ready" : "Off";
+  $("hostLed").className = "led" + (on ? " red pulse" : "");
+  $("navLed").className = "led" + (on ? " red pulse" : "");
   const note = $("hostNote");
   note.hidden = false;
   if (!S.can_host) note.textContent = S.mac
     ? "To stream this Mac, install Sunshine (brew tap LizardByte/homebrew && brew install sunshine) and reopen Solinear."
     : "Streaming from this PC isn't available yet.";
-  else if (S.is_host && S.mac) note.textContent = "If macOS asks for Screen Recording and Accessibility, allow both, then reopen Solinear.";
+  else if (on && !S.mac) note.textContent = "Solinear runs as admin while hosting, so your input reaches games that run as admin.";
+  else if (!on && !S.mac) note.textContent = "Turning this on asks Windows for admin: games that run as admin only take input from an admin app.";
   else note.hidden = true;
+  $("macPerms").hidden = !(S.mac && on);
 }
 
 $("hostSwitch").onclick = async (e) => {
   const sw = e.currentTarget, want = sw.getAttribute("aria-checked") !== "true";
   sw.disabled = true; sw.setAttribute("aria-checked", String(want));
   try { S = await invoke("set_hosting", { enabled: want }); }
-  catch (err) { toast("Setup failed: " + err); }
+  catch (err) { banner("Setup failed: " + err); }
   refresh();
 };
 
 // ---------- sign in / switch ----------
+// the system opens the link in the default browser's last profile, which may be the wrong one
+const showLink = (r) => ($("signinUrl").value = (r && r.url) || "");
+$("copyUrl").onclick = async () => {
+  try { await navigator.clipboard.writeText($("signinUrl").value); $("copyUrl").textContent = "Copied"; }
+  catch { $("signinUrl").select(); }
+};
 function waitForSignIn() {
   signing = true;
   refresh();
@@ -86,33 +113,37 @@ function waitForSignIn() {
 }
 $("signinBtn").onclick = async () => {
   $("signinBtn").disabled = true;
-  try { await invoke("sign_in"); waitForSignIn(); }
+  try { showLink(await invoke("sign_in")); waitForSignIn(); }
   catch (e) { toast("Sign-in failed: " + e); $("signinBtn").disabled = false; }
 };
 $("switchBtn").onclick = async () => {
-  try { await invoke("switch_account"); hostSig = ""; waitForSignIn(); }
+  try { showLink(await invoke("switch_account")); hostSig = ""; waitForSignIn(); }
   catch (e) { toast("Couldn't switch account: " + e); }
 };
 
-// ---------- hosts ----------
-async function loadHosts() {
+// ---------- devices ----------
+async function loadHosts(force) {
   let list;
   try { list = await invoke("hosts"); } catch (e) { return; }
   const sig = JSON.stringify(list);
-  if (sig === hostSig) return;       // don't rebuild (and steal focus) when nothing changed
+  if (sig === hostSig && !force) return;   // don't rebuild (and steal focus) when nothing changed
   hostSig = sig;
+  $("navCount").textContent = pad2(list.length);
   const box = $("hosts");
   box.replaceChildren();
   if (!list.length) {
-    box.className = "";
-    box.append(h("div.empty", {}, icon("i-empty"),
-      h("b", {}, "No PCs yet"),
-      "Open Solinear on your gaming PC, sign in with the same account and turn on “Stream this PC”."));
+    box.append(h("div.card.empty", {}, h("div.os", {}, icon("i-off")),
+      h("div.dot", {}, "NO DEVICES FOUND"),
+      h("p", {}, "Install Solinear on your other PC, sign in with the same account and turn on hosting under This PC.")));
     return;
   }
-  box.className = "grid";
   for (const host of list) box.append(hostCard(host));
 }
+$("scanBtn").onclick = async (e) => {
+  const b = e.currentTarget; b.disabled = true;
+  await loadHosts(true);
+  b.disabled = false;
+};
 
 function hostCard(host) {
   const ui = hostUi.get(host.ip) || {};
@@ -120,16 +151,19 @@ function hostCard(host) {
   const screens = host.screens || [];
   if (!ui.screen || !screens.some(s => s.id === ui.screen)) ui.screen = (screens.find(s => s.primary) || screens[0] || {}).id ?? null;
 
-  const link = !host.online ? h("span", {}, "Offline")
-    : [h("span.dot." + (host.direct ? "ok" : "warn")), host.direct ? "Direct" : "Relayed", host.ms != null ? ` · ${host.ms} ms` : null];
-  const pick = screens.length > 1 && h("label.pick", {}, "Screen",
-    h("select", { onchange: (e) => (ui.screen = e.target.value) },
-      screens.map((s, i) => h("option", { value: s.id, selected: s.id === ui.screen }, `${s.name || "Screen " + (i + 1)} (${s.w}×${s.h})${s.primary ? " · main" : ""}`))));
-  const err = h("div.err", { role: "alert", hidden: !ui.error }, icon("i-warn"), h("span", {}, ui.error || ""));
-  const btn = h("button.btn.play", { disabled: !host.online || ui.busy }, "");
+  const badge = host.online ? `${host.direct ? "Direct" : "Relayed"}${host.ms != null ? ` · ${host.ms}ms` : ""}` : "Offline";
+  const pick = screens.length > 1
+    ? h("div.seg.sm", { role: "group", "aria-label": "Screen" }, screens.map((s, i) => {
+        const b = h("button", { "aria-pressed": String(s.id === ui.screen), title: `${s.w}×${s.h}${s.primary ? " · main" : ""}` }, `Screen ${i + 1}`);
+        b.onclick = () => { ui.screen = s.id; for (const x of b.parentNode.children) x.setAttribute("aria-pressed", String(x === b)); };
+        return b;
+      }))
+    : h("span.single", {}, "Single display");
+  const err = h("div.err", { role: "alert", hidden: !ui.error }, h("span.led.red"), h("span", {}, ui.error || ""));
+  const btn = h("button.btn", {});
   const paint = () => {
     btn.disabled = !host.online || !!ui.busy;
-    btn.replaceChildren(...(ui.busy ? [h("span.spin"), "Connecting…"] : [icon("i-play"), host.online ? "Play" : "Offline"]));
+    btn.replaceChildren(...(ui.busy ? [h("span.spin"), "CONNECTING"] : [icon("i-play"), "PLAY"]));
     err.hidden = !ui.error; err.lastChild.textContent = ui.error || "";
   };
   btn.onclick = async () => {
@@ -141,59 +175,39 @@ function hostCard(host) {
     ui.busy = false; paint();
   };
   paint();
-  return h("div.host" + (host.online ? "" : ".off"), {},
-    h("div.top", {}, h("div.os", {}, icon(host.os === "mac" ? "i-mac" : "i-win"), h("i" + (host.online ? ".on" : ""), { title: host.online ? "Online" : "Offline" })),
-      h("div", { style: "min-width:0" }, h("div.nm", { title: host.name }, host.name), h("div", {}, link))),
-    pick, btn, err);
+  return h("div.card.host" + (host.online ? "" : ".off"), {},
+    h("div.top", {},
+      h("div.os", {}, icon(host.os === "mac" ? "i-mac" : "i-win")),
+      h("div.grow", {},
+        h("div.nm", {}, h("span.led" + (host.online ? ".on" : ""), { title: host.online ? "Online" : "Offline" }), h("b", { title: host.name }, host.name),
+          host.this_device && h("span.tag", { title: "The PC you're using now. Streaming it shows a screen inside a screen: handy only for testing." }, "THIS DEVICE")),
+        h("span.badge", {}, badge))),
+    h("div.bottom", {}, pick, btn),
+    err);
 }
 
-// ---------- settings sheet ----------
-const sheet = $("sheet");
-const focusables = () => [...sheet.querySelectorAll("button, select")].filter(e => !e.disabled);
-function openSheet() {
-  sheet.classList.add("open"); $("scrim").classList.add("open");
-  sheet.removeAttribute("inert"); $("closeSheet").focus();
-}
-function closeSheet() {
-  sheet.classList.remove("open"); $("scrim").classList.remove("open");
-  sheet.setAttribute("inert", ""); $("settingsBtn").focus();
-}
-sheet.setAttribute("inert", "");
-$("settingsBtn").onclick = openSheet;
-$("closeSheet").onclick = closeSheet;
-$("scrim").onclick = closeSheet;
-document.addEventListener("keydown", (e) => {
-  if (!sheet.classList.contains("open")) return;
-  if (e.key === "Escape") closeSheet();
-  if (e.key === "Tab") {   // keep focus inside the sheet
-    const f = focusables(), first = f[0], last = f[f.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  }
-});
-
-const readSettings = () => ({
-  quality: $("quality").value, display_mode: $("display_mode").value,
-  reverse_scroll: $("reverse_scroll").getAttribute("aria-checked") === "true",
-  match_keys: $("match_keys").getAttribute("aria-checked") === "true",
-});
-async function loadSettings() {
-  try {
-    const s = await invoke("settings");
-    $("quality").value = s.quality; $("display_mode").value = s.display_mode;
-    $("reverse_scroll").setAttribute("aria-checked", String(!!s.reverse_scroll));
-    $("match_keys").setAttribute("aria-checked", String(!!s.match_keys));
-  } catch (e) { toast("Couldn't load settings: " + e); }
-}
-const save = async () => { try { await invoke("save_settings", readSettings()); } catch (e) { toast("Couldn't save settings: " + e); } };
-$("quality").onchange = $("display_mode").onchange = save;
-for (const id of ["reverse_scroll", "match_keys"]) $(id).onclick = (e) => {
-  e.currentTarget.setAttribute("aria-checked", String(e.currentTarget.getAttribute("aria-checked") !== "true")); save();
+// ---------- settings ----------
+let settings = {};
+const save = async () => {
+  try { settings = await invoke("save_settings", settings); } catch (e) { toast("Couldn't save settings: " + e); }
 };
+function paintSettings() {
+  for (const seg of document.querySelectorAll("#page-settings .seg"))
+    for (const b of seg.children) b.setAttribute("aria-pressed", String(settings[seg.dataset.key] === b.dataset.v));
+  for (const id of ["reverse_scroll", "match_keys"]) $(id).setAttribute("aria-checked", String(!!settings[id]));
+}
+for (const seg of document.querySelectorAll("#page-settings .seg"))
+  for (const b of seg.children) b.onclick = () => { settings[seg.dataset.key] = b.dataset.v; paintSettings(); save(); };
+for (const id of ["reverse_scroll", "match_keys"]) $(id).onclick = () => { settings[id] = !settings[id]; paintSettings(); save(); };
+async function loadSettings() {
+  try { settings = await invoke("settings"); paintSettings(); } catch (e) { toast("Couldn't load settings: " + e); }
+}
 
 // ---------- boot ----------
 listen("toast", (e) => toast(e.payload));
 listen("state-changed", () => { hostSig = ""; refresh(); });
+window.__TAURI__.app?.getVersion?.().then(v => ($("version").textContent = "v" + v)).catch(() => {});
+go("devices");
 loadSettings();
 refresh();
 setInterval(() => { if (!signing) refresh(); }, 15000);
