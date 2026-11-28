@@ -1,0 +1,58 @@
+name: Mac app
+
+on:
+  push:
+    branches: [rust-rewrite]
+    paths: ["app/**", ".github/workflows/mac.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/helper/go.mod
+          cache-dependency-path: app/helper/go.sum
+
+      - name: Network helper (universal)
+        working-directory: app/helper
+        run: |
+          GOARCH=arm64 go build -ldflags="-s -w" -o solinear-net-arm64 .
+          GOARCH=amd64 go build -ldflags="-s -w" -o solinear-net-amd64 .
+          lipo -create -output solinear-net solinear-net-arm64 solinear-net-amd64
+          go test ./...
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tests
+        working-directory: app/src-tauri
+        run: cargo test
+
+      - name: Build Solinear.app (universal)
+        working-directory: app
+        run: npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app
+
+      - name: Add the helper and sign ad hoc
+        run: |
+          APP=app/src-tauri/target/universal-apple-darwin/release/bundle/macos/Solinear.app
+          cp app/helper/solinear-net "$APP/Contents/MacOS/solinear-net"  # found next to the app's binary
+          codesign --force --deep --sign - "$APP"
+          ditto -c -k --keepParent "$APP" Solinear-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Solinear-mac
+          path: Solinear-mac.zip
