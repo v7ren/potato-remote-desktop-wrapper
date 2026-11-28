@@ -4,71 +4,139 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Solinear</title>
+<!-- shortcut: fonts come from Google; offline the app falls back to system fonts. Bundle them before release. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap">
+<link rel="icon" href="icons/logo.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-  <symbol id="i-logo" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></symbol>
-  <symbol id="i-win" viewBox="0 0 24 24"><path d="M3 5.5l7.5-1v7H3zM12 4.3L21 3v8.5h-9zM3 12.5h7.5v7L3 18.5zM12 12.5h9V21l-9-1.3z"/></symbol>
-  <symbol id="i-mac" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
-  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
-  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-logo" viewBox="20 26 72 60"><g fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="miter" stroke-linecap="square"><rect x="26" y="32" width="42" height="30"/><rect x="44" y="50" width="42" height="30"/></g><rect x="39" y="57" width="10" height="10" fill="#d71921" stroke="none"/></symbol>
+  <symbol id="i-devices" viewBox="0 0 24 24"><rect x="2" y="4" width="13" height="10" rx="1"/><path d="M6 18h5M8.5 14v4"/><rect x="17" y="8" width="5" height="12" rx="1"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></symbol>
+  <symbol id="i-mac" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="1"/><path d="M2 19h20"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
-  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></symbol>
-  <symbol id="i-empty" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M9 8.5l6 3M15 8.5l-6 3"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4"/></symbol>
+  <symbol id="i-off" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="1"/><path d="M8 21h8M12 17v4M3 3l18 18"/></symbol>
+  <symbol id="i-cmd" viewBox="0 0 24 24"><path d="M9 6v12M15 6v12M6 9h12M6 15h12"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="18" r="3"/></symbol>
 </svg>
 
 <!-- sign in / missing prerequisites -->
-<div class="center" id="welcome" hidden>
-  <div class="hero">
-    <div class="logo"><svg><use href="#i-logo"/></svg></div>
-    <h1>Solinear</h1>
-    <p id="welcomeText">Stream your PCs anywhere. Sign in once, then use the same account on every device.</p>
-    <button class="btn" id="signinBtn">Sign in</button>
-    <p class="hint dim" id="signinHint" hidden></p>
+<div id="welcome" class="dot-bg center" hidden>
+  <div class="card signin">
+    <svg class="logo lg" aria-hidden="true"><use href="#i-logo"/></svg>
+    <h1 class="dot">SOLINEAR</h1>
+    <p class="mono kicker">Stream your PCs anywhere</p>
+    <p id="welcomeText" class="muted"></p>
+    <button class="btn wide" id="signinBtn">Sign in with Tailscale</button>
+    <div class="hint" id="signinHint" hidden>
+      <p class="mono">Finish signing in in your browser…</p>
+      <p class="mono">Wrong browser or profile? Paste the link where you want it:</p>
+      <div class="linkrow"><input class="mono" id="signinUrl" readonly aria-label="Sign-in link"><button class="btn-line mono" id="copyUrl">Copy</button></div>
+    </div>
   </div>
 </div>
 
 <!-- main -->
-<div id="app" hidden>
-  <header>
-    <div class="brand"><div class="logo"><svg><use href="#i-logo"/></svg></div>Solinear</div>
-    <div class="spacer"></div>
-    <div class="account"><b id="acct"></b><button id="switchBtn">Switch account</button></div>
-    <button class="icon-btn" id="settingsBtn" aria-label="Settings" aria-haspopup="dialog"><svg><use href="#i-gear"/></svg></button>
-  </header>
-  <main>
-    <div class="host-row" id="hostRow">
-      <div class="grow"><b id="hostTitle">Stream this PC</b><small id="hostSub"></small><div class="note dim" id="hostNote" hidden></div></div>
-      <button class="switch" id="hostSwitch" role="switch" aria-checked="false" aria-labelledby="hostTitle"></button>
+<div id="app" class="shell" hidden>
+  <aside class="side">
+    <div>
+      <div class="brand">
+        <svg class="logo" aria-hidden="true"><use href="#i-logo"/></svg>
+        <span class="dot">SOLINEAR</span>
+      </div>
+      <nav>
+        <button class="nav" data-page="devices"><svg><use href="#i-devices"/></svg><span>Devices</span><span class="mono count" id="navCount">00</span></button>
+        <button class="nav" data-page="thispc"><svg><use href="#i-cpu"/></svg><span id="navThis">This PC</span><span class="led" id="navLed"></span></button>
+        <button class="nav" data-page="settings"><svg><use href="#i-sliders"/></svg><span>Settings</span></button>
+      </nav>
     </div>
-    <h2>Your PCs</h2>
-    <div id="hosts" class="grid" aria-live="polite"></div>
+    <div class="acct-wrap">
+      <div class="card acct">
+        <div class="acct-top">
+          <div class="avatar mono" id="avatar">··</div>
+          <div class="grow">
+            <div class="acct-name" id="acct"></div>
+            <div class="mono tiny"><span class="led on"></span>SIGNED IN</div>
+          </div>
+        </div>
+        <button class="btn-line mono" id="switchBtn">Switch account</button>
+      </div>
+    </div>
+  </aside>
+
+  <main class="dot-bg">
+    <div id="banner" class="banner" role="alert" hidden><span class="led red"></span><span id="bannerText"></span><button class="mono" id="bannerX">DISMISS ✕</button></div>
+
+    <section class="page" id="page-devices">
+      <header class="head">
+        <div><div class="mono kicker">01 // YOUR DEVICES</div><h1 class="dot">DEVICES</h1></div>
+        <button class="btn-line mono" id="scanBtn"><svg><use href="#i-refresh"/></svg>SCAN</button>
+      </header>
+      <div id="hosts" class="grid" aria-live="polite"></div>
+    </section>
+
+    <section class="page" id="page-thispc" hidden>
+      <header class="head">
+        <div><div class="mono kicker">02 // HOST</div><h1 class="dot" id="thisTitle">THIS PC</h1></div>
+        <div class="mono muted">NAME: <span class="hi" id="deviceName"></span></div>
+      </header>
+      <div class="card pad">
+        <div class="row">
+          <div><h2 id="hostTitle">Let my other devices stream this PC</h2><p class="muted small">Only devices signed in to your account can connect.</p></div>
+          <button class="switch lg" id="hostSwitch" role="switch" aria-checked="false" aria-labelledby="hostTitle"></button>
+        </div>
+        <div class="status">
+          <span class="led" id="hostLed"></span><span class="mono dimc">STATUS:</span><span class="mono hi" id="hostStatus"></span>
+        </div>
+        <p class="note mono" id="hostNote" hidden></p>
+      </div>
+      <div class="card pad" id="macPerms" hidden>
+        <div class="row tight"><span class="mono label"><svg class="sm"><use href="#i-cmd"/></svg>macOS PERMISSIONS</span><span class="mono tag">MAC ONLY</span></div>
+        <div class="perm"><div><div>Screen Recording</div><div class="mono tiny">Needed to send your screen</div></div></div>
+        <div class="perm"><div><div>Accessibility</div><div class="mono tiny">Needed for remote mouse and keyboard</div></div></div>
+        <p class="mono tiny">If macOS asks, allow both in System Settings → Privacy &amp; Security, then reopen Solinear.</p>
+      </div>
+    </section>
+
+    <section class="page" id="page-settings" hidden>
+      <header class="head">
+        <div><div class="mono kicker">03 // CONFIGURATION</div><h1 class="dot">SETTINGS</h1></div>
+      </header>
+      <div class="card pad">
+        <div class="mono label sec">01 / STREAM</div>
+        <div class="row"><div><div>Quality</div><div class="small muted">Smoother keeps motion fluid on slow networks</div></div>
+          <div class="seg" data-key="quality"><button data-v="auto">Auto</button><button data-v="smoother">Smooth</button><button data-v="sharper">Sharp</button></div></div>
+        <div class="row line"><div><div>Display mode</div><div class="small muted">How the stream window opens</div></div>
+          <div class="seg" data-key="display_mode"><button data-v="borderless">Borderless</button><button data-v="fullscreen">Fullscreen</button><button data-v="windowed">Window</button></div></div>
+      </div>
+      <div class="card pad">
+        <div class="mono label sec">02 / INPUT</div>
+        <div class="row"><div><div id="l_mk">Match Mac / Windows keys</div><div class="small muted">On a Mac streaming Windows, Cmd works as Ctrl (Cmd+C copies). On Windows streaming a Mac, Ctrl works as Cmd.</div></div>
+          <button class="switch" id="match_keys" role="switch" aria-checked="false" aria-labelledby="l_mk"></button></div>
+        <div class="row line"><div><div id="l_rs">Reverse scroll</div><div class="small muted">Flip the scroll wheel direction</div></div>
+          <button class="switch" id="reverse_scroll" role="switch" aria-checked="false" aria-labelledby="l_rs"></button></div>
+      </div>
+      <div class="card pad">
+        <div class="mono label sec">03 / SHORTCUTS</div>
+        <div class="keys mono">
+          <p><b id="mod">Ctrl+Alt+Shift</b> plus</p>
+          <p><kbd>X</kbd> fullscreen / window</p><p><kbd>M</kbd> gaming mode (mouse for 3D games)</p>
+          <p><kbd>F1</kbd>–<kbd>F12</kbd> show host screen 1–12</p><p><kbd>S</kbd> stats · <kbd>Z</kbd> release mouse · <kbd>Q</kbd> quit</p>
+        </div>
+      </div>
+      <div class="card pad">
+        <div class="mono label sec">04 / ABOUT</div>
+        <div class="dot about">SOLINEAR <span class="mono muted small" id="version"></span></div>
+        <div class="mono tiny">Direct encrypted stream over your own Tailscale network. No Solinear servers.</div>
+      </div>
+    </section>
   </main>
 </div>
-
-<!-- settings -->
-<div id="scrim"></div>
-<aside id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
-  <header>
-    <h3 id="sheetTitle">Settings</h3>
-    <button class="icon-btn" id="closeSheet" aria-label="Close settings"><svg><use href="#i-x"/></svg></button>
-  </header>
-  <div class="sheet-body">
-    <label class="field"><span>Quality</span>
-      <select id="quality" class="setting">
-        <option value="auto">Auto</option><option value="smoother">Smoother</option><option value="sharper">Sharper</option>
-      </select></label>
-    <label class="field"><span>Window</span>
-      <select id="display_mode" class="setting">
-        <option value="borderless">Borderless fullscreen</option><option value="fullscreen">Fullscreen</option><option value="windowed">Windowed</option>
-      </select></label>
-    <div class="toggle"><div id="l_rs">Reverse scroll wheel</div><button class="switch setting" id="reverse_scroll" role="switch" aria-checked="false" aria-labelledby="l_rs"></button></div>
-    <div class="toggle"><div id="l_mk">Match my keyboard's shortcuts<small>On a Mac streaming a Windows PC, Cmd works as Ctrl (Cmd+C copies) and Option+Tab switches apps. On a Windows PC streaming a Mac, Ctrl works as Cmd.</small></div><button class="switch setting" id="match_keys" role="switch" aria-checked="false" aria-labelledby="l_mk"></button></div>
-    <div class="keys"><p><b id="mod">Ctrl+Alt+Shift</b> plus:</p>
-      <p>X: switch fullscreen / window</p><p>F1 to F12: show host screen 1 to 12</p><p>S: stats · Z: release mouse · M: gaming mode · Q: quit</p></div>
-  </div>
-</aside>
 
 <div id="toasts" role="status" aria-live="polite"></div>
 

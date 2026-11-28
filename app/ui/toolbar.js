@@ -42,7 +42,7 @@ const views = {
   ] }),
   desktop: () => ({ title: "Desktop", items: [
     ...(info.screens || []).slice(0, 12).map((s, i) => ({ label: `Screen ${i + 1}` + (s.w ? `  (${s.w}×${s.h})` : ""), check: s.id === info.current_screen,
-      run: () => { info.current_screen = s.id; call("toolbar_switch_screen", { id: s.id }); closeMenu(); } })),
+      run: () => { switchScreen(s.id); closeMenu(); } })),
     "sep", { note: "Changes below reconnect the stream" },
     { label: "Quality", go: () => choice("Quality", "quality", [["Smoother", "smoother"], ["Auto", "auto"], ["Sharper", "sharper"]]) },
     { label: "Resolution", go: () => choice("Resolution", "size", [["Match this screen", null], ["1280×720", "1280x720"], ["1920×1080", "1920x1080"], ["2560×1440", "2560x1440"], ["3840×2160", "3840x2160"]]) },
@@ -105,12 +105,26 @@ $("menuBtn").onclick = () => ($("panel").hidden ? openMenu() : closeMenu());
 
 // ---- pill ----
 $("fullBtn").title = $("fullBtn").ariaLabel = `Fullscreen / window (${MOD}+X)`;
-$("gameKey").textContent = `${MOD}+M`;
 $("gameBtn").title = `Gaming mode captures the mouse. ${MOD}+M toggles it.`;
 $("fullBtn").onclick = () => call("toolbar_combo", { key: "x" });
 const setGaming = (on) => { gaming = on; $("gameBtn").setAttribute("aria-pressed", String(on)); };
 $("gameBtn").onclick = () => { setGaming(!gaming); call("toolbar_combo", { key: "m" }); };
 listen("gaming-mode", (e) => setGaming(!!e.payload));
+
+// Screen 1 | 2 on the pill (only when the host has more than one)
+function switchScreen(id) { info.current_screen = id; paintScreens(); call("toolbar_switch_screen", { id }); }
+function paintScreens() {
+  const box = $("screens"), list = (info.screens || []).slice(0, 12);
+  box.hidden = list.length < 2;
+  box.replaceChildren(...list.map((s, i) => {
+    const b = el("button", "", String(i + 1));
+    b.title = `Screen ${i + 1}` + (s.w ? ` (${s.w}×${s.h})` : "") + (i < 12 ? ` · ${MOD}+F${i + 1}` : "");
+    b.setAttribute("aria-pressed", String(s.id === info.current_screen));
+    b.onclick = () => switchScreen(s.id);
+    return b;
+  }));
+  fit();
+}
 
 // remember where the pill was dropped
 $("grip").addEventListener("pointerup", () => call("toolbar_drag_end", { x: window.screenX, y: window.screenY }));
@@ -119,5 +133,5 @@ $("pill").addEventListener("pointerup", (e) => { if (e.target === $("pill")) cal
 (async () => {
   try { info = await invoke("toolbar_info"); } catch (e) { console.error(e); }
   opts = { ...(info.opts || {}) };
-  fit();
+  paintScreens();
 })();
