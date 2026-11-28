@@ -1,0 +1,67 @@
+From 1b881764bbb86d765a55f62f6af73c984a75d2fb Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 00:14:24 +0800
+Subject: [PATCH 3/5] Service: pass its arguments on to Sunshine.exe
+
+Arguments after the service's own path are appended to Sunshine.exe's command line, so a service
+registered under another name can run Apollo with its own config file.
+---
+ tools/sunshinesvc.cpp | 28 +++++++++++++++++++++++++++-
+ 1 file changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/tools/sunshinesvc.cpp b/tools/sunshinesvc.cpp
+index ee1da71..328e191 100644
+--- a/tools/sunshinesvc.cpp
++++ b/tools/sunshinesvc.cpp
+@@ -17,6 +17,26 @@ SERVICE_STATUS service_status;
+ HANDLE stop_event;
+ HANDLE session_change_event;
+ 
++// Solinear: arguments after the service's own path (from its ImagePath) are passed on to Sunshine.exe, so a
++// service registered under another name can point Apollo at its own config file.
++std::wstring sunshine_command_line = L"Sunshine.exe";
++
++std::wstring args_after_program(const wchar_t *command_line) {
++  const wchar_t *p = command_line;
++  if (*p == L'"') {
++    p = wcschr(p + 1, L'"');
++    p = p ? p + 1 : command_line + wcslen(command_line);
++  } else {
++    while (*p && *p != L' ' && *p != L'\t') {
++      p++;
++    }
++  }
++  while (*p == L' ' || *p == L'\t') {
++    p++;
++  }
++  return p;
++}
++
+ #define SERVICE_NAME "ApolloService"
+ 
+ DWORD WINAPI HandlerEx(DWORD dwControl, DWORD dwEventType, LPVOID lpEventData, LPVOID lpContext) {
+@@ -263,7 +283,8 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv) {
+     UpdateProcThreadAttribute(startup_info.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job_handle, sizeof(job_handle), NULL, NULL);
+ 
+     PROCESS_INFORMATION process_info;
+-    if (!CreateProcessAsUserW(console_token, L"Sunshine.exe", NULL, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, (LPSTARTUPINFOW) &startup_info, &process_info)) {
++    std::wstring command = sunshine_command_line;  // CreateProcess may write into the buffer
++    if (!CreateProcessAsUserW(console_token, L"Sunshine.exe", command.data(), NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, (LPSTARTUPINFOW) &startup_info, &process_info)) {
+       CloseHandle(console_token);
+       CloseHandle(job_handle);
+       continue;
+@@ -347,6 +368,11 @@ int main(int argc, char *argv[]) {
+     return DoGracefulTermination(atol(argv[2]));
+   }
+ 
++  auto extra = args_after_program(GetCommandLineW());
++  if (!extra.empty()) {
++    sunshine_command_line += L" " + extra;
++  }
++
+   // By default, services have their current directory set to %SYSTEMROOT%\System32.
+   // We want to use the directory where Sunshine.exe is located instead of system32.
+   // This requires stripping off 2 path components: the file name and the last folder
+-- 
+2.51.1.windows.1
+

@@ -1,6 +1,6 @@
 //! Host side: our own streaming server (Apollo on Windows, Sunshine on macOS): its config, login,
 //! state file, process, and the local web API used to hand it a client's PIN.
-use crate::keys::keymap;
+use crate::keys::{keycombos, keymap};
 use crate::store::{self, Cfg, MAC};
 use serde_json::{json, Value};
 use std::io;
@@ -67,6 +67,11 @@ pub fn conf_text(home: &Path, cfg: &Cfg, mac: bool) -> String {
     if !keys.is_empty() {
         let k: Vec<String> = keys.iter().map(|k| format!("0x{k:X}")).collect();
         lines.push(format!("keybindings = [{}]", k.join(", ")));
+    }
+    let combos = keycombos(str_of(cfg, "keys_for"), mac);
+    if !combos.is_empty() {
+        let k: Vec<String> = combos.iter().map(|k| format!("0x{k:X}")).collect();
+        lines.push(format!("keycombos = [{}]", k.join(", "))); // ignored by an unpatched Apollo
     }
     lines.join("\n") + "\n"
 }
@@ -312,6 +317,22 @@ pub fn full_perm_body(client: &Value) -> Option<Value> {
     Some(c)
 }
 
+/// Apply the current key map to the running server without a restart (our patched Apollo's /api/input-remap).
+/// False if the server can't (unpatched or Mac Sunshine): the caller restarts it to read the config instead.
+pub fn apply_keys_live(cfg: &Cfg) -> bool {
+    if MAC {
+        return false;
+    }
+    let os = str_of(cfg, "keys_for");
+    let body = json!({"keybindings": keymap(os, false), "keycombos": keycombos(os, false)});
+    let go = || -> Result<bool, ureq::Error> {
+        let cookie = login(cfg)?;
+        let mut r = web().post(url("/api/input-remap")).header("Cookie", &cookie).send_json(body)?;
+        Ok(r.body_mut().read_json::<Value>()?["status"] == true)
+    };
+    go().unwrap_or(false)
+}
+
 /// Give every paired device full permissions (Apollo only). Best effort: the server may be mid-restart.
 pub fn grant_all_perms(cfg: &Cfg) {
     if MAC {
@@ -414,6 +435,7 @@ mod tests {
         assert!(!set_keys(&h, &mut cfg, "windows", false).unwrap()); // same OS: nothing to do
         assert!(set_keys(&h, &mut cfg, "mac", false).unwrap());
         assert!(conf().contains("keybindings = [0x5B, 0xA2,"));
+        assert!(conf().contains("keycombos = [0x5B, 0x9, 0xA4]")); // Cmd+Tab -> Alt+Tab
         assert!(!set_keys(&h, &mut cfg, "mac", false).unwrap());
         assert!(set_keys(&h, &mut cfg, "", false).unwrap()); // toggle off: back to no remap
         assert!(!conf().contains("keybindings"));

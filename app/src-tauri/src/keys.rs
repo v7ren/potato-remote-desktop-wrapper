@@ -7,6 +7,17 @@ const MAC_ON_WINDOWS: [u32; 8] = [0x5B, 0xA2, 0x5C, 0xA3, 0xA2, 0x5B, 0x11, 0x5B
 /// Windows client on a Mac host: Ctrl -> Cmd (Ctrl+C = Cmd+C, Ctrl+Tab = app switcher), Win -> Control.
 const WINDOWS_ON_MAC: [u32; 10] = [0xA2, 0x5B, 0xA3, 0x5C, 0x11, 0x5B, 0x5B, 0xA2, 0x5C, 0xA3];
 
+/// Combos for our patched Apollo: [held, pressed, replacement] triples. With Cmd remapped to Ctrl, a Mac's
+/// Cmd+Tab would be Ctrl+Tab; while Tab is pressed, Cmd stands in for Alt instead, so it switches apps.
+const MAC_ON_WINDOWS_COMBOS: [u32; 3] = [0x5B, 0x09, 0xA4];
+
+pub fn keycombos(client_os: &str, host_is_mac: bool) -> &'static [u32] {
+    match (client_os, host_is_mac) {
+        ("mac", false) => &MAC_ON_WINDOWS_COMBOS,
+        _ => &[], // a Mac host runs upstream Sunshine, which has no combos
+    }
+}
+
 pub fn keymap(client_os: &str, host_is_mac: bool) -> &'static [u32] {
     match (client_os, host_is_mac) {
         ("mac", false) => &MAC_ON_WINDOWS,

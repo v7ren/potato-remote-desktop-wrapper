@@ -112,7 +112,15 @@ impl Hooks for HostHooks {
     fn keys(&self, client_os: &str) -> bool {
         // called before every stream, so a device paired since the last one gets full permissions before it launches
         apollo::grant_all_perms(&self.app.cfg.lock().unwrap().clone());
-        self.reconfigure(|c| apollo::set_keys(&apollo::home(), c, client_os, MAC))
+        let mut cfg = self.app.cfg.lock().unwrap().clone();
+        let Ok(true) = apollo::set_keys(&apollo::home(), &mut cfg, client_os, MAC) else { return false };
+        let _ = store::save(&cfg);
+        *self.app.cfg.lock().unwrap() = cfg.clone();
+        if apollo::apply_keys_live(&cfg) {
+            return false; // patched Apollo took it live: a stream already running keeps going
+        }
+        let _ = self.app.server.restart(); // older Apollo reads the key map only at startup
+        true
     }
     fn screen(&self, id: &str) -> bool {
         self.reconfigure(|c| apollo::set_screen(&apollo::home(), c, id, MAC))

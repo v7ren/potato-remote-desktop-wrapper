@@ -1,0 +1,226 @@
+From 8be176f94344cb1b5f40960caaf56a2c388e1cbf Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 00:13:43 +0800
+Subject: [PATCH 1/5] Live key remap and key combos
+
+POST /api/input-remap replaces keybindings without a restart, so starting a stream from another
+device no longer drops a running one. New keycombos config: [held, pressed, replacement] triples
+let a held key stand in for another during a combo (Mac Cmd+Tab -> Alt+Tab on Windows).
+---
+ src/config.cpp     |  5 +++++
+ src/config.h       |  2 ++
+ src/confighttp.cpp | 52 ++++++++++++++++++++++++++++++++++++++++++++++
+ src/input.cpp      | 50 ++++++++++++++++++++++++++++++++++++++++++++
+ src/input.h        |  7 +++++++
+ 5 files changed, 116 insertions(+)
+
+diff --git a/src/config.cpp b/src/config.cpp
+index f30596d..501089b 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -1245,6 +1245,11 @@ namespace config {
+     int_between_f(vars, "fec_percentage", stream.fec_percentage, {1, 255});
+ 
+     map_int_int_f(vars, "keybindings"s, input.keybindings);
++    list_int_f(vars, "keycombos"s, input.keycombos);
++    if (input.keycombos.size() % 3) {
++      BOOST_LOG(warning) << "config: expected keycombos to have a multiple of three elements --> not "sv << input.keycombos.size();
++      input.keycombos.clear();
++    }
+ 
+     // This config option will only be used by the UI
+     // When editing in the config file itself, use "keybindings"
+diff --git a/src/config.h b/src/config.h
+index bec1ac9..f40d69c 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -193,6 +193,8 @@ namespace config {
+ 
+   struct input_t {
+     std::unordered_map<int, int> keybindings;
++    /// Solinear: [held key, pressed key, replacement for the held key] triples; see input::passthrough.
++    std::vector<int> keycombos;
+ 
+     std::chrono::milliseconds back_button_timeout;
+     std::chrono::milliseconds key_repeat_delay;
+diff --git a/src/confighttp.cpp b/src/confighttp.cpp
+index e270dd7..d714f50 100644
+--- a/src/confighttp.cpp
++++ b/src/confighttp.cpp
+@@ -31,6 +31,7 @@
+ #include "file_handler.h"
+ #include "globals.h"
+ #include "httpcommon.h"
++#include "input.h"
+ #include "logging.h"
+ #include "network.h"
+ #include "nvhttp.h"
+@@ -1304,6 +1305,56 @@ namespace confighttp {
+    *
+    * @api_examples{/api/reset-display-device-persistence| POST| null}
+    */
++  /**
++   * @brief Solinear: replace the key remap without restarting, so a running stream is not dropped.
++   * @param response The HTTP response object.
++   * @param request The HTTP request object.
++   *
++   * @api_examples{/api/input-remap| POST| {"keybindings":[91,162],"keycombos":[91,9,164]}}
++   */
++  void saveInputRemap(resp_https_t response, req_https_t request) {
++    if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
++      return;
++    }
++
++    print_req(request);
++
++    try {
++      std::stringstream ss;
++      ss << request->content.rdbuf();
++      nlohmann::json input_tree = nlohmann::json::parse(ss.str());
++      auto bindings = input_tree.value("keybindings", std::vector<int> {});
++      auto combos = input_tree.value("keycombos", std::vector<int> {});
++      if (bindings.size() % 2 || combos.size() % 3) {
++        bad_request(response, request, "keybindings needs pairs, keycombos needs triples");
++        return;
++      }
++      for (auto v : bindings) {
++        if (v < 0 || v > 0xFF) {
++          bad_request(response, request, "key codes must be 0-255");
++          return;
++        }
++      }
++      for (auto v : combos) {
++        if (v < 0 || v > 0xFF) {
++          bad_request(response, request, "key codes must be 0-255");
++          return;
++        }
++      }
++      std::unordered_map<int, int> map;
++      for (std::size_t i = 0; i < bindings.size(); i += 2) {
++        map[bindings[i]] = bindings[i + 1];
++      }
++      input::set_remap(std::move(map), std::move(combos));
++      nlohmann::json output_tree;
++      output_tree["status"] = true;
++      send_response(response, output_tree);
++    } catch (std::exception &e) {
++      BOOST_LOG(warning) << "SaveInputRemap: "sv << e.what();
++      bad_request(response, request, e.what());
++    }
++  }
++
+   void resetDisplayDevicePersistence(resp_https_t response, req_https_t request) {
+     if (!validateContentType(response, request, "application/json") || !authenticate(response, request)) {
+       return;
+@@ -1545,6 +1596,7 @@ namespace confighttp {
+     server.resource["^/api/restart$"]["POST"] = restart;
+     server.resource["^/api/quit$"]["POST"] = quit;
+     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
++    server.resource["^/api/input-remap$"]["POST"] = saveInputRemap;
+     server.resource["^/api/password$"]["POST"] = savePassword;
+     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
+     server.resource["^/api/clients/list$"]["GET"] = getClients;
+diff --git a/src/input.cpp b/src/input.cpp
+index 6c03d0d..e61df40 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -13,6 +13,8 @@ extern "C" {
+ #include <chrono>
+ #include <cmath>
+ #include <list>
++#include <mutex>
++#include <set>
+ #include <thread>
+ #include <unordered_map>
+ 
+@@ -616,7 +618,17 @@ namespace input {
+     platf::button_mouse(platf_input, button, release);
+   }
+ 
++  // Solinear: the remap can change while streaming (set_remap), so it is read under this lock.
++  static std::mutex remap_mutex;
++
++  void set_remap(std::unordered_map<int, int> keybindings, std::vector<int> keycombos) {
++    std::lock_guard lock {remap_mutex};
++    config::input.keybindings = std::move(keybindings);
++    config::input.keycombos = std::move(keycombos);
++  }
++
+   short map_keycode(short keycode) {
++    std::lock_guard lock {remap_mutex};
+     auto it = config::input.keybindings.find(keycode);
+     if (it != std::end(config::input.keybindings)) {
+       return it->second;
+@@ -625,6 +637,29 @@ namespace input {
+     return keycode;
+   }
+ 
++  // Solinear: key combos. A held key M normally goes out as map_keycode(M); a rule [M, K, N] makes M go out as N
++  // from the moment K is pressed while M is held, until M is released. E.g. a Mac's Cmd arrives as Win and is
++  // remapped to Ctrl (Cmd+C = Ctrl+C), but Cmd+Tab must be Alt+Tab: [Win, Tab, Alt].
++  static std::set<uint16_t> held_keys;  // keys held on the client, before any remap
++  static std::unordered_map<uint16_t, uint16_t> combo_override;  // held key -> key it goes out as now
++
++  void apply_combos(uint16_t key_code, uint8_t flags) {
++    std::vector<int> combos;
++    {
++      std::lock_guard lock {remap_mutex};
++      combos = config::input.keycombos;
++    }
++    for (std::size_t i = 0; i + 2 < combos.size(); i += 3) {
++      auto held = (uint16_t) combos[i];
++      if (combos[i + 1] != key_code || !held_keys.count(held) || combo_override.count(held)) {
++        continue;
++      }
++      platf::keyboard_update(platf_input, map_keycode(held), true, flags);  // let go of what it was sent as
++      platf::keyboard_update(platf_input, (uint16_t) combos[i + 2], false, flags);
++      combo_override[held] = (uint16_t) combos[i + 2];
++    }
++  }
++
+   /**
+    * @brief Update flags for keyboard shortcut combo's
+    */
+@@ -769,6 +804,21 @@ namespace input {
+ 
+     pressed = !release;
+ 
++    if (release) {
++      held_keys.erase(keyCode);
++      auto it = combo_override.find(keyCode);
++      if (it != combo_override.end()) {
++        // this key was standing in for a combo's replacement: release that instead
++        platf::keyboard_update(platf_input, it->second, true, packet->flags);
++        combo_override.erase(it);
++        update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
++        return;
++      }
++    } else {
++      apply_combos(keyCode, packet->flags);
++      held_keys.insert(keyCode);
++    }
++
+     send_key_and_modifiers(keyCode, release, packet->flags, synthetic_modifiers);
+ 
+     update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
+diff --git a/src/input.h b/src/input.h
+index 37fe7d6..9238a4e 100644
+--- a/src/input.h
++++ b/src/input.h
+@@ -23,6 +23,13 @@ namespace input {
+ 
+   bool probe_gamepads();
+ 
++  /**
++   * @brief Solinear: replace the key remap while running (no restart, so a running stream keeps going).
++   * @param keybindings Single-key remaps, as config "keybindings".
++   * @param keycombos [held key, pressed key, replacement] triples, as config "keycombos".
++   */
++  void set_remap(std::unordered_map<int, int> keybindings, std::vector<int> keycombos);
++
+   std::shared_ptr<input_t> alloc(safe::mail_t mail);
+ 
+   struct touch_port_t: public platf::touch_port_t {
+-- 
+2.51.1.windows.1
+

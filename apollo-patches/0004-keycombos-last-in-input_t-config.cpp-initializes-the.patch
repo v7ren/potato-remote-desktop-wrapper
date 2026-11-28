@@ -1,0 +1,36 @@
+From 80cd1c6198c68352f546044c0854056084c70d15 Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 00:28:00 +0800
+Subject: [PATCH 4/5] keycombos last in input_t: config.cpp initializes the
+ struct by position
+
+---
+ src/config.h | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/config.h b/src/config.h
+index f40d69c..420a355 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -193,8 +193,6 @@ namespace config {
+ 
+   struct input_t {
+     std::unordered_map<int, int> keybindings;
+-    /// Solinear: [held key, pressed key, replacement for the held key] triples; see input::passthrough.
+-    std::vector<int> keycombos;
+ 
+     std::chrono::milliseconds back_button_timeout;
+     std::chrono::milliseconds key_repeat_delay;
+@@ -216,6 +214,9 @@ namespace config {
+ 
+     bool enable_input_only_mode;
+     bool forward_rumble;
++
++    /// Solinear: [held key, pressed key, replacement for the held key] triples; see input::passthrough. Last: config.cpp initializes this struct by position.
++    std::vector<int> keycombos;
+   };
+ 
+   namespace flag {
+-- 
+2.51.1.windows.1
+
