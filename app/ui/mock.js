@@ -1,7 +1,7 @@
 // Loaded only when window.__TAURI__ is missing (opening the pages straight in a browser).
 (() => {
   const listeners = {};
-  let st = { signed_in: false, account: "ren@example.com", device_name: "Ren-MacBook", is_host: false, can_host: true, mac: false, missing: [], error: null };
+  let st = { signed_in: false, account: "ren@example.com", device_name: "Ren-MacBook", is_host: false, can_host: true, mac: false, missing: [], error: null, start_at_login: false };
   let settings = { quality: "auto", display_mode: "borderless", reverse_scroll: false, match_keys: true };
   const hosts = [
     { name: "Ren-pc", ip: "100.64.0.2", os: "windows", online: true, direct: true, ms: 12, this_device: true,
@@ -21,6 +21,7 @@
     sign_in: async () => { setTimeout(() => { st.signed_in = true; emit("state-changed"); }, 2500); return { url: "https://login.tailscale.com/a/mock" }; },
     switch_account: async () => { st.signed_in = false; setTimeout(() => { st.signed_in = true; st.account = "other@example.com"; emit("state-changed"); }, 2500); return { url: "https://login.tailscale.com/a/mock2" }; },
     set_hosting: ({ enabled }) => { st.is_host = enabled; return { ...st }; },
+    set_autostart: ({ enabled }) => { st.start_at_login = enabled; return { ...st }; },
     hosts: () => hosts,
     settings: () => settings,
     save_settings: (s) => (settings = s),

@@ -1,7 +1,7 @@
 From 80cd1c6198c68352f546044c0854056084c70d15 Mon Sep 17 00:00:00 2001
 From: "v7r.envy" <noreply@example.invalid>
 Date: Sun, 29 Nov 2026 00:28:00 +0800
-Subject: [PATCH 4/6] keycombos last in input_t: config.cpp initializes the
+Subject: [PATCH 4/7] keycombos last in input_t: config.cpp initializes the
  struct by position
 
 ---

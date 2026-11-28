@@ -1,7 +1,7 @@
 From 038cbfe34ca2cd82545fb6264a6e7e2d92f11756 Mon Sep 17 00:00:00 2001
 From: "v7r.envy" <noreply@example.invalid>
 Date: Sun, 29 Nov 2026 02:26:15 +0800
-Subject: [PATCH 6/6] Detect host shortcuts on the client's own keys, not their
+Subject: [PATCH 6/7] Detect host shortcuts on the client's own keys, not their
  remap
 
 With a Mac client's Ctrl remapped to Win, Ctrl+Alt+Shift+F<n> (switch display) and the other host

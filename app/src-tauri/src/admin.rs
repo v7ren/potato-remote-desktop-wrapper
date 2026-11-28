@@ -31,3 +31,19 @@ pub fn relaunch_elevated() -> bool {
 pub fn relaunch_elevated() -> bool {
     false
 }
+
+/// Run `program` with `params` elevated (one UAC prompt), without waiting. False if declined or it failed.
+#[cfg(windows)]
+pub fn run_elevated(program: &str, params: &str) -> bool {
+    use windows::core::{w, HSTRING};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let r = unsafe { ShellExecuteW(None, w!("runas"), &HSTRING::from(program), &HSTRING::from(params), None, SW_HIDE) };
+    r.0 as isize > 32
+}
+
+#[cfg(not(windows))]
+pub fn run_elevated(_program: &str, _params: &str) -> bool {
+    false
+}

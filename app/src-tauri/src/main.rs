@@ -3,6 +3,7 @@
 mod admin;
 mod agent;
 mod apollo;
+mod autostart;
 mod commands;
 mod keys;
 mod moonlight;
@@ -11,9 +12,11 @@ mod overlay;
 mod quality;
 mod screens;
 mod store;
+mod tray;
 
 use commands::*;
 use std::sync::Arc;
+use tauri::Manager;
 
 /// The one place the app's Tauri context is generated: on macOS it embeds Info.plist under a fixed symbol name,
 /// so a second generate_context! (e.g. for the toolbar) would not link.
@@ -39,14 +42,31 @@ fn main() {
     let app = App::new(net);
     let exit = app.clone();
     let setup = app.clone();
+    let background = std::env::args().any(|a| a == "--background"); // started at login: straight to the tray
     tauri::Builder::default()
         .manage(app)
         .setup(move |a| {
             let _ = setup.handle.set(a.handle().clone());
+            let switches = tray::build(a.handle(), setup.clone(), setup.is_host())?;
+            let _ = setup.tray.set(switches);
+            if background {
+                if let Some(w) = a.get_webview_window("main") {
+                    let _ = w.hide();
+                }
+            }
             Ok(())
         })
+        .on_window_event(|w, e| {
+            // closing the window keeps Solinear running in the tray (hosting, start at login); Quit is in the tray
+            if let tauri::WindowEvent::CloseRequested { api, .. } = e {
+                if w.label() == "main" {
+                    api.prevent_close();
+                    let _ = w.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
-            state, sign_in, switch_account, set_hosting, hosts, settings, save_settings, play
+            state, sign_in, switch_account, set_hosting, hosts, settings, save_settings, play, set_autostart
         ])
         .build(context())
         .expect("failed to build Solinear")

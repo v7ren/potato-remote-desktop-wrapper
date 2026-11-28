@@ -1,6 +1,7 @@
 //! The Tauri commands (see CONTRACT.md) and the app state they share. Everything network-dependent goes
 //! through `net::Net`.
 use crate::admin;
+use crate::autostart;
 use crate::agent::{self, Agent, Hooks};
 use crate::apollo;
 use crate::moonlight::{self, Opts};
@@ -41,6 +42,8 @@ pub struct App {
     ctl: OnceLock<(u16, String)>,
     next_id: AtomicU64,
     pub handle: OnceLock<tauri::AppHandle>,
+    /// The tray menu's switches (tray.rs), kept in step with the window.
+    pub tray: OnceLock<crate::tray::Switches>,
 }
 
 type R = Result<Value, String>;
@@ -141,7 +144,16 @@ impl App {
             ctl: OnceLock::new(),
             next_id: AtomicU64::new(1),
             handle: OnceLock::new(),
+            tray: OnceLock::new(),
         })
+    }
+
+    pub fn toast(&self, msg: &str) {
+        self.emit("toast", msg.to_string());
+    }
+
+    pub fn is_host(&self) -> bool {
+        self.cfg.lock().unwrap().get("host").and_then(Value::as_bool).unwrap_or(false)
     }
 
     fn emit(&self, event: &str, payload: impl serde::Serialize + Clone) {
@@ -301,7 +313,23 @@ impl App {
             "account": me.as_ref().and_then(|m| m.login.clone()),
             "device_name": me.as_ref().and_then(|m| m.name.clone()),
             "is_host": is_host, "can_host": can_host, "mac": MAC, "missing": missing, "error": error,
+            "start_at_login": self.sync_tray(is_host),
         }))
+    }
+
+    /// Keep the tray's switches showing what's true; returns whether Solinear starts at login.
+    fn sync_tray(&self, is_host: bool) -> bool {
+        let login = autostart::enabled();
+        if let Some(t) = self.tray.get() {
+            let _ = t.host.set_checked(is_host);
+            let _ = t.login.set_checked(login);
+        }
+        login
+    }
+
+    pub fn set_autostart(self: &Arc<Self>, enabled: bool) -> R {
+        autostart::set(enabled)?;
+        self.state()
     }
 
     pub fn sign_in(self: &Arc<Self>) -> R {
@@ -631,6 +659,7 @@ commands! {
     settings();
     save_settings(quality: String, display_mode: String, reverse_scroll: bool, match_keys: bool);
     play(ip: String, name: String, screen: Option<String>);
+    set_autostart(enabled: bool);
 }
 
 #[cfg(test)]

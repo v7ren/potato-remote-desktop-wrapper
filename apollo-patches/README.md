@@ -9,6 +9,7 @@ On top of Apollo `v0.4.6` (github.com/ClassicOldSong/Apollo).
 | 0003 | The Windows service passes its arguments on to `Sunshine.exe`, so a service under another name can use its own config |
 | 0004 | Fix-up for 0001: `keycombos` last in `input_t` (the config is initialized by position) |
 | 0005 | Builds with current MSYS2: OpenSSL 3.6 accessors, MinGW's own synthetic pointer declarations |
+| 0007 | `system_tray = false` hides Apollo's own tray icon (Solinear has its own). `SUNSHINE_ENABLE_TRAY=OFF` doesn't link on Windows, hence a runtime setting |
 | 0006 | Host shortcuts (Ctrl+Alt+Shift+F<n> etc.) are detected on the keys the client pressed, not their remap, so they work for a Mac client whose Ctrl is remapped |
 
 Build (MSYS2 UCRT64, packages from Apollo's `docs/building.md`):

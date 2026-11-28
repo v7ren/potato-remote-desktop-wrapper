@@ -1,0 +1,69 @@
+From 9ec19a9553eb17e1e99e670a547fceab7fbe28ba Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 03:56:07 +0800
+Subject: [PATCH 7/7] system_tray setting: let a launcher turn Apollo's tray
+ icon off
+
+Default true (unchanged). SUNSHINE_ENABLE_TRAY=OFF doesn't link on Windows (the tray code stays enabled
+while the library is dropped), so this is a runtime switch instead.
+---
+ src/config.cpp | 1 +
+ src/config.h   | 3 +++
+ src/main.cpp   | 8 ++++++--
+ 3 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/src/config.cpp b/src/config.cpp
+index 501089b..1755ed1 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -1296,6 +1296,7 @@ namespace config {
+     bool_f(vars, "enable_input_only_mode", input.enable_input_only_mode);
+ 
+     bool_f(vars, "hide_tray_controls", sunshine.hide_tray_controls);
++    bool_f(vars, "system_tray", sunshine.system_tray);
+     bool_f(vars, "enable_pairing", sunshine.enable_pairing);
+     bool_f(vars, "enable_discovery", sunshine.enable_discovery);
+     bool_f(vars, "envvar_compatibility_mode", sunshine.envvar_compatibility_mode);
+diff --git a/src/config.h b/src/config.h
+index 420a355..21cb436 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -289,6 +289,9 @@ namespace config {
+     std::vector<prep_cmd_t> prep_cmds;
+     std::vector<prep_cmd_t> state_cmds;
+     std::vector<server_cmd_t> server_cmds;
++
++    /// Solinear: false = no tray icon (the launcher has its own). Last, with a default: initialized by position.
++    bool system_tray = true;
+   };
+ 
+   extern video_t video;
+diff --git a/src/main.cpp b/src/main.cpp
+index 51a5998..774ca62 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -258,7 +258,9 @@ int main(int argc, char *argv[]) {
+ 
+ #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+   // create tray thread and detach it
+-  system_tray::run_tray();
++  if (config::sunshine.system_tray) {
++    system_tray::run_tray();
++  }
+ #endif
+ 
+   // Create signal handler after logging has been initialized
+@@ -418,7 +420,9 @@ int main(int argc, char *argv[]) {
+ 
+   // stop system tray
+ #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+-  system_tray::end_tray();
++  if (config::sunshine.system_tray) {
++    system_tray::end_tray();
++  }
+ #endif
+ 
+ #ifdef WIN32
+-- 
+2.51.1.windows.1
+

@@ -1,7 +1,7 @@
 From 1b881764bbb86d765a55f62f6af73c984a75d2fb Mon Sep 17 00:00:00 2001
 From: "v7r.envy" <noreply@example.invalid>
 Date: Sun, 29 Nov 2026 00:14:24 +0800
-Subject: [PATCH 3/6] Service: pass its arguments on to Sunshine.exe
+Subject: [PATCH 3/7] Service: pass its arguments on to Sunshine.exe
 
 Arguments after the service's own path are appended to Sunshine.exe's command line, so a service
 registered under another name can run Apollo with its own config file.

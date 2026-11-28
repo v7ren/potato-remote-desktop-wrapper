@@ -58,6 +58,7 @@ pub fn conf_text(home: &Path, cfg: &Cfg, mac: bool) -> String {
         // Windows display-device options (match the client's resolution/refresh)
         lines.push("dd_resolution_option = auto".into());
         lines.push("dd_refresh_rate_option = auto".into());
+        lines.push("system_tray = false".into()); // our patched Apollo: Solinear's tray icon is the only one
     }
     let out = str_of(cfg, "output_name");
     if !out.is_empty() {

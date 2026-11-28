@@ -88,7 +88,17 @@ function renderThisPc() {
   else if (!on && !S.mac) note.textContent = "Turning this on asks Windows for admin: games that run as admin only take input from an admin app.";
   else note.hidden = true;
   $("macPerms").hidden = !(S.mac && on);
+  $("loginSwitch").setAttribute("aria-checked", String(!!S.start_at_login));
 }
+
+$("loginSwitch").onclick = async (e) => {
+  const sw = e.currentTarget, want = sw.getAttribute("aria-checked") !== "true";
+  sw.disabled = true; sw.setAttribute("aria-checked", String(want));
+  try { S = await invoke("set_autostart", { enabled: want }); }
+  catch (err) { banner("Start at login: " + err); }
+  sw.disabled = false;
+  refresh();
+};
 
 $("hostSwitch").onclick = async (e) => {
   const sw = e.currentTarget, want = sw.getAttribute("aria-checked") !== "true";
