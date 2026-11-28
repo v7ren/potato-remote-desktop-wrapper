@@ -112,7 +112,13 @@ $("gameBtn").onclick = () => { setGaming(!gaming); call("toolbar_combo", { key: 
 listen("gaming-mode", (e) => setGaming(!!e.payload));
 
 // Screen 1 | 2 on the pill (only when the host has more than one)
-function switchScreen(id) { info.current_screen = id; paintScreens(); call("toolbar_switch_screen", { id }); }
+async function switchScreen(id) {
+  const was = info.current_screen;
+  info.current_screen = id; paintScreens();
+  const r = await call("toolbar_switch_screen", { id });   // undefined if it failed
+  info.current_screen = r ? r.current_screen : was;          // light the screen that's really showing
+  paintScreens();
+}
 function paintScreens() {
   const box = $("screens"), list = (info.screens || []).slice(0, 12);
   box.hidden = list.length < 2;

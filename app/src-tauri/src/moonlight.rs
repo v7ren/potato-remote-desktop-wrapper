@@ -271,6 +271,7 @@ pub fn send_combo(pid: u32, key: &str) -> Result<(), String> {
         let h = found.1.ok_or("The stream window isn't open.")?;
         // Windows refuses focus changes from background programs; sharing the front window's input queue lets us
         let front = GetForegroundWindow();
+        let was_front = front == h;
         let front_thread = GetWindowThreadProcessId(front, None);
         let me = windows::Win32::System::Threading::GetCurrentThreadId();
         let attached = front_thread != me && windows::Win32::System::Threading::AttachThreadInput(me, front_thread, true).as_bool();
@@ -279,7 +280,8 @@ pub fn send_combo(pid: u32, key: &str) -> Result<(), String> {
         if attached {
             let _ = windows::Win32::System::Threading::AttachThreadInput(me, front_thread, false);
         }
-        std::thread::sleep(Duration::from_millis(50));
+        // a stream window that just got focus back re-grabs the keyboard first; keys before that are dropped
+        std::thread::sleep(Duration::from_millis(if was_front { 50 } else { 400 }));
         if GetForegroundWindow() != h {
             return Err("Couldn't bring the stream window to the front.".into());
         }

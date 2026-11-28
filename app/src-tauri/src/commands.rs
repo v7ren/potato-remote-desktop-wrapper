@@ -492,6 +492,9 @@ impl App {
         let mut g = self.session.lock().unwrap();
         let s = g.as_mut().ok_or("No stream is running.")?;
         let screen = s.screens.iter().find(|x| x.id == id).ok_or("Unknown screen.")?.clone();
+        if s.current_screen == id {
+            return Ok(Self::info_of(s)); // already showing: never restart the stream for nothing
+        }
         // Same size as the screen being streamed: the host's server switches live on Ctrl+Alt+Shift+F<n>, no restart.
         // shortcut: n = position in the host's list, assumed to match its DXGI order (see screens::list)
         let cur = s.screens.iter().find(|x| x.id == s.current_screen);
@@ -503,6 +506,9 @@ impl App {
                 s.current_screen = id;
                 return Ok(Self::info_of(s));
             }
+        }
+        if screens::live_only(&id) {
+            return Err("That PC can switch only its first 12 screens.".into()); // older host: no /screen to fall back to
         }
         let _ = s.child.kill(); // the host's server restarts on a screen change and would drop it anyway
         let (code, v) = moonlight::agent_post(&*self.net, &s.ip, "/screen", json!({"id": id}))?;
