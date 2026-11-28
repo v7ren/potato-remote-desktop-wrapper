@@ -68,7 +68,7 @@ pub fn run() {
     let ctl = Ctl { port, token };
     // the saved spot, else top-centre of the primary screen
     let saved = forward(&ctl, "toolbar_pos", &json!({})).ok().filter(|v| v["x"].is_number());
-    let mut ctx = tauri::generate_context!();
+    let mut ctx = crate::context();
     ctx.config_mut().app.windows.clear(); // no main window here
     tauri::Builder::default()
         .manage(ctl)
