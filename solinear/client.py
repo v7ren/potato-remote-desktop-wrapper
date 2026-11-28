@@ -106,6 +106,7 @@ def match_keys(ip: str) -> None:
 def pair(ip: str) -> bool:
     pin = f"{secrets.randbelow(10_000):04d}"
     _cancel_stale(ip)
+    wait_for_server(ip)  # a Windows host restarts its server on /cancel
     proc = subprocess.Popen(_moonlight("pair", _addr(ip), "--pin", pin), cwd=MOON)
     deadline = time.time() + 30  # room for a first-time macOS "Allow incoming connections?" prompt on the host
     ok = False

@@ -60,7 +60,7 @@ class Api:
                 info=lambda: {"name": me["name"], "solinear": 1, "os": "mac" if store.MAC else "windows",
                               "screens": host.screens()},
                 on_paired=lambda name: self._toast(f"New device paired: {name}"),
-                cancel=lambda ip: host.cancel_pending(self._cfg, ip),
+                cancel=self._cancel,
                 action=host.run_action,
                 keys=self._set_keys)
             self._agent = host.serve(me["ip"], handler)  # raises if the port is taken; Apollo not started then
@@ -82,19 +82,32 @@ class Api:
     def _set_keys(self, client_os) -> bool:
         """Switch the server's key remap for the connecting client; restarts the server if it changed.
         shortcut: a restart drops any other stream running on this host at that moment (rare for one owner)."""
+        host.grant_full(self._cfg)  # the client calls this before every stream, after any new pairing
         with self._lock:
             if not host.set_keys(self._cfg, client_os):
                 return False
-            if self._server and self._server.poll() is None:
-                self._server.terminate()
-                try:
-                    self._server.wait(timeout=10)  # its ports must be free before the new one starts
-                except subprocess.TimeoutExpired:
-                    self._server.kill()
-                    self._server.wait()
-            self._server = host.start_apollo()
-            self._children.append(self._server)
-            return True
+            return self._restart_server()
+
+    def _cancel(self, ip):
+        host.cancel_pending(self._cfg, ip)
+        if not store.MAC:
+            # Apollo keys pairing by a client ID that every Moonlight shares, so one half-finished pairing
+            # blocks all later ones ("Out of order call to getservercert") until it restarts
+            with self._lock:
+                self._restart_server()
+
+    def _restart_server(self) -> bool:
+        """Call with self._lock held."""
+        if self._server and self._server.poll() is None:
+            self._server.terminate()
+            try:
+                self._server.wait(timeout=10)  # its ports must be free before the new one starts
+            except subprocess.TimeoutExpired:
+                self._server.kill()
+                self._server.wait()
+        self._server = host.start_apollo()
+        self._children.append(self._server)
+        return True
 
     def stop(self):
         for p in self._children:

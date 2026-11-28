@@ -139,6 +139,35 @@ class KeyRemap(unittest.TestCase):
         self.assertNotIn("keybindings", host.CONF.read_text())
 
 
+class GrantFull(unittest.TestCase):
+    """Apollo gives devices after the first view+list only; every paired device must be able to Play."""
+
+    def test_updates_limited_devices_with_whole_entry(self):
+        import io
+        from unittest import mock
+        sent = []
+
+        class Resp(io.BytesIO):
+            headers = {"Set-Cookie": "auth=tok; Path=/"}
+
+            def __enter__(self):
+                return self
+
+        listing = {"named_certs": [{"name": "Mac", "uuid": "A", "perm": host.FULL_PERM},
+                                   {"name": "PC", "uuid": "B", "perm": 50331648, "display_mode": "",
+                                    "allow_client_commands": True}]}
+
+        def call(path, body=None, headers=None, method=None):
+            sent.append((path, body, headers))
+            return Resp(json.dumps(listing if path == "/api/clients/list" else {"status": True}).encode())
+
+        with mock.patch.object(host, "_call", call), mock.patch.object(host.store, "MAC", False):
+            host.grant_full({"apollo_user": "u", "apollo_pass": "p"})
+        updates = [(b, h) for p, b, h in sent if p == "/api/clients/update"]
+        self.assertEqual(updates, [({"name": "PC", "uuid": "B", "perm": host.FULL_PERM, "display_mode": "",
+                                     "allow_client_commands": True}, {"Cookie": "auth=tok"})])
+
+
 class SunshinePairingPick(unittest.TestCase):
     """Sunshine needs the pending request's id; only the request from the asking client's IP may be used."""
 

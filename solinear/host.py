@@ -169,6 +169,30 @@ def cancel_pending(cfg: dict, client_ip: str) -> None:
         pass
 
 
+FULL_PERM = 0x071F1F00  # Apollo PERM::_all; pairing gives only the first device this, later ones view+list
+
+
+def _apollo_cookie(cfg: dict) -> dict:
+    with _call("/api/login", {"username": cfg["apollo_user"], "password": cfg["apollo_pass"]}) as r:
+        return {"Cookie": (r.headers.get("Set-Cookie") or "").split(";")[0]}  # "auth=<token>"
+
+
+def grant_full(cfg: dict) -> None:
+    """Apollo: let every paired device launch and send input. Only the owner's devices can pair at all, but
+    Apollo gives every device after the first view+list only, so it pairs and then gets 403 on Play."""
+    if store.MAC:
+        return  # Sunshine has no per-device permissions
+    try:
+        auth = _apollo_cookie(cfg)
+        with _call("/api/clients/list", headers=auth) as r:
+            devices = json.load(r).get("named_certs", [])
+        for d in devices:
+            if int(d.get("perm", 0)) != FULL_PERM:  # update overwrites every field, so send the whole entry
+                _call("/api/clients/update", {**d, "perm": FULL_PERM}, auth).close()
+    except (OSError, ValueError):
+        pass
+
+
 def submit_pin(cfg: dict, pin: str, name: str, client_ip: str) -> bool:
     """Hand a client's PIN to our server, the same as typing it into its web page."""
     call = _call
@@ -180,10 +204,7 @@ def submit_pin(cfg: dict, pin: str, name: str, client_ip: str) -> bool:
                 return False  # Moonlight's request hasn't reached the server yet; client retries
             with call("/api/pin", {"pairing_id": pid, "pin": pin, "name": name}, auth) as r:
                 return bool(json.load(r).get("status"))
-        # Apollo: cookie from /api/login
-        with call("/api/login", {"username": cfg["apollo_user"], "password": cfg["apollo_pass"]}) as r:
-            cookie = (r.headers.get("Set-Cookie") or "").split(";")[0]  # "auth=<token>"
-        with call("/api/pin", {"pin": pin, "name": name}, {"Cookie": cookie}) as r:
+        with call("/api/pin", {"pin": pin, "name": name}, _apollo_cookie(cfg)) as r:  # Apollo
             return bool(json.load(r).get("status"))
     except (OSError, ValueError):  # server down, wrong creds, or no pairing pending yet
         return False
