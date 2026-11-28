@@ -170,6 +170,7 @@ class Pill(QWidget):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                          | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)  # stay visible while Moonlight is active
         self.setStyleSheet(BTN_CSS)
         self.ip, self.name = ip, name
         cfg = store.load()
@@ -382,11 +383,29 @@ class Pill(QWidget):
             QApplication.quit()  # stream ended
 
 
+def _mac_float(widget: QWidget) -> None:
+    """macOS hides a Qt tool window while its app isn't frontmost (Moonlight is) and keeps other apps' windows
+    off a fullscreen Space. Make the pill a no-Dock-icon helper whose window floats over every Space."""
+    import objc  # pyobjc, installed with pywebview on macOS
+    from AppKit import NSApplication, NSStatusWindowLevel
+
+    NSApplication.sharedApplication().setActivationPolicy_(1)  # accessory: may sit over fullscreen apps
+    win = objc.objc_object(c_void_p=int(widget.winId())).window()
+    win.setHidesOnDeactivate_(False)
+    win.setLevel_(NSStatusWindowLevel)
+    win.setCollectionBehavior_(1 << 0 | 1 << 4 | 1 << 8)  # all Spaces | stationary | fullscreen auxiliary
+
+
 def run(argv: list[str]) -> None:
     ip, name = argv[0], (argv[1] if len(argv) > 1 else argv[0])
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
     pill = Pill(ip, name)
     pill.show()
+    if store.MAC:
+        try:
+            _mac_float(pill)
+        except (ImportError, AttributeError) as e:  # toolbar still works, just not over fullscreen
+            print("toolbar can't float:", e, file=sys.stderr)
     pill.start_stream()
     app.exec()

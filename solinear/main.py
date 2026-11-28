@@ -5,6 +5,7 @@ import atexit
 import ctypes
 import importlib.util
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -15,17 +16,21 @@ import webbrowser
 from . import client, host, store, tailnet
 
 
-def ensure_admin():
-    if store.MAC:
-        return  # Mac uses the user's Tailscale app, so nothing here needs admin
-    # only our own tailscaled needs admin (for its network adapter); reusing the user's Tailscale doesn't
+def ensure_admin(hosting=False, cleanup=lambda: None):
+    """Returns only if no relaunch happened. Hosting needs admin: Windows drops input that a non-admin
+    Apollo sends to admin windows (many games, e.g. ones with anti-cheat, run as admin)."""
+    if store.MAC or ctypes.windll.shell32.IsUserAnAdmin():
+        return
+    # our own tailscaled needs admin (for its network adapter); reusing the user's Tailscale doesn't
     theirs = tailnet.status(sock=None)
-    if ctypes.windll.shell32.IsUserAnAdmin() or (theirs and theirs.get("BackendState") == "Running"):
+    if not (hosting or store.load().get("host")) and theirs and theirs.get("BackendState") == "Running":
         return
     args = sys.argv[1:] if store.FROZEN else ["-m", "solinear.main", *sys.argv[1:]]
-    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(f'"{a}"' for a in args),
-                                        str(store.APP), 1)
-    sys.exit(0)
+    if ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(f'"{a}"' for a in args),
+                                           str(store.APP), 1) <= 32:
+        return  # UAC declined: keep running without admin
+    cleanup()  # our tailscaled/Apollo must go before the elevated copy starts its own
+    os._exit(0)  # also from a UI thread, where sys.exit would only end that thread
 
 
 class Api:
@@ -118,6 +123,7 @@ class Api:
 
     def make_host(self):
         host.setup(self._cfg)
+        ensure_admin(hosting=True, cleanup=self.stop)  # the elevated copy takes over; returns if UAC declined
         return self.state()
 
     def hosts(self):
