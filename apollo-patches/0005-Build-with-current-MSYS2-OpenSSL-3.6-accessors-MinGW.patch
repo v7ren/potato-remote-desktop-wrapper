@@ -1,7 +1,7 @@
 From 134fdf26d731756746d496df21242a098bfa383f Mon Sep 17 00:00:00 2001
 From: "v7r.envy" <noreply@example.invalid>
 Date: Sun, 29 Nov 2026 00:28:01 +0800
-Subject: [PATCH 5/5] Build with current MSYS2: OpenSSL 3.6 accessors, MinGW's
+Subject: [PATCH 5/6] Build with current MSYS2: OpenSSL 3.6 accessors, MinGW's
  own synthetic pointer API
 
 ---

@@ -1,0 +1,245 @@
+From a001340af1db4fa4c169669d5eb674a6c43383d9 Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 02:26:36 +0800
+Subject: [PATCH] Solinear control channel
+
+With SOLINEAR_CONTROL=1: status lines on stdout (stage, connected, error, ended), commands on stdin
+(combo <name>, screen <1-12>, quit) so a launcher drives the stream without simulated key presses,
+and only the address given on the command line is used (no LAN / other-network addresses).
+---
+ app/backend/nvcomputer.cpp       |  7 +++
+ app/streaming/input/input.h      |  7 +++
+ app/streaming/input/keyboard.cpp | 34 ++++++++++++++
+ app/streaming/session.cpp        | 80 ++++++++++++++++++++++++++++++++
+ app/streaming/session.h          |  3 ++
+ 5 files changed, 131 insertions(+)
+
+diff --git a/app/backend/nvcomputer.cpp b/app/backend/nvcomputer.cpp
+index 60f06e0..0eea85d 100644
+--- a/app/backend/nvcomputer.cpp
++++ b/app/backend/nvcomputer.cpp
+@@ -487,6 +487,13 @@ QVector<NvAddress> NvComputer::uniqueAddresses() const
+     QReadLocker readLocker(&lock);
+     QVector<NvAddress> uniqueAddressList;
+ 
++    // Solinear: the launcher's address is a forwarder over its own network; other addresses the host reports
++    // (LAN, another Tailscale) would skip it. Use only the address we were given.
++    if (qEnvironmentVariableIntValue("SOLINEAR_CONTROL") == 1 && !manualAddress.isNull()) {
++        uniqueAddressList.append(manualAddress);
++        return uniqueAddressList;
++    }
++
+     // Start with addresses correctly ordered
+     uniqueAddressList.append(activeAddress);
+     uniqueAddressList.append(localAddress);
+diff --git a/app/streaming/input/input.h b/app/streaming/input/input.h
+index 151c69c..6c3422a 100644
+--- a/app/streaming/input/input.h
++++ b/app/streaming/input/input.h
+@@ -155,6 +155,13 @@ public:
+     static
+     QString getUnmappedGamepads();
+ 
++    // Solinear: run one of Moonlight's own Ctrl+Alt+Shift actions by name ("quit", "fullscreen", "stats",
++    // "mouse-mode", "ungrab", "minimize", "paste"). False if the name is unknown.
++    bool performNamedCombo(const QString& name);
++
++    // Solinear: press Ctrl+Alt+Shift+<vk> on the host (e.g. F2 = Sunshine/Apollo's "show display 2").
++    void sendHostShortcut(short vk);
++
+ private:
+     enum KeyCombo {
+         KeyComboQuit,
+diff --git a/app/streaming/input/keyboard.cpp b/app/streaming/input/keyboard.cpp
+index 29e218d..33a3f1f 100644
+--- a/app/streaming/input/keyboard.cpp
++++ b/app/streaming/input/keyboard.cpp
+@@ -22,6 +22,40 @@
+ #define GET_KEYPRESS_EXTENDED_MODIFIER(x) ((char)(((x) >> 16) & 0xFF))
+ #define GET_KEYPRESS_FLAGS(x) ((char)(((x) >> 24) & 0xFF))
+ 
++bool SdlInputHandler::performNamedCombo(const QString& name)
++{
++    static const QHash<QString, KeyCombo> combos = {
++        {"quit", KeyComboQuit}, {"ungrab", KeyComboUngrabInput}, {"fullscreen", KeyComboToggleFullScreen},
++        {"stats", KeyComboToggleStatsOverlay}, {"mouse-mode", KeyComboToggleMouseMode},
++        {"minimize", KeyComboToggleMinimize}, {"paste", KeyComboPasteText},
++    };
++    auto it = combos.find(name);
++    if (it == combos.end()) {
++        return false;
++    }
++    performSpecialKeyCombo(it.value());
++    return true;
++}
++
++void SdlInputHandler::sendHostShortcut(short vk)
++{
++    // The host watches the modifier keys themselves (not just the modifier flags) to detect its shortcuts
++    static const struct { short vk; char flag; } mods[] = {
++        {0xA2, MODIFIER_CTRL}, {0xA4, MODIFIER_ALT}, {0xA0, MODIFIER_SHIFT},
++    };
++    char held = 0;
++    for (const auto& m : mods) {
++        held |= m.flag;
++        LiSendKeyboardEvent(0x8000 | m.vk, KEY_ACTION_DOWN, held);
++    }
++    LiSendKeyboardEvent(0x8000 | vk, KEY_ACTION_DOWN, held);
++    LiSendKeyboardEvent(0x8000 | vk, KEY_ACTION_UP, held);
++    for (int i = 2; i >= 0; i--) {
++        held &= ~mods[i].flag;
++        LiSendKeyboardEvent(0x8000 | mods[i].vk, KEY_ACTION_UP, held);
++    }
++}
++
+ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
+ {
+     switch (combo) {
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+index 40c1e59..34e439b 100644
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -1,4 +1,8 @@
+ #include "session.h"
++#include <iostream>
++#include <mutex>
++#include <string>
++#include <thread>
+ #include "settings/streamingpreferences.h"
+ #include "streaming/streamutils.h"
+ #include "backend/richpresencemanager.h"
+@@ -28,6 +32,41 @@
+ #define SDL_CODE_GAMECONTROLLER_SET_MOTION_EVENT_STATE 103
+ #define SDL_CODE_GAMECONTROLLER_SET_CONTROLLER_LED 104
+ #define SDL_CODE_GAMECONTROLLER_SET_ADAPTIVE_TRIGGERS 105
++#define SDL_CODE_SOLINEAR_COMMAND 200
++
++// Solinear: a launcher runs Moonlight with SOLINEAR_CONTROL=1 and talks to the stream through stdin/stdout,
++// one line each way: status out ("stage <name>", "connected", "error <text>", "ended"), commands in
++// ("combo <name>", "screen <1-12>", "quit"). No simulated key presses, no window focus games.
++static bool solinearControl()
++{
++    static const bool on = qEnvironmentVariableIntValue("SOLINEAR_CONTROL") == 1;
++    return on;
++}
++
++static void solinearStatus(const QString& line)
++{
++    if (solinearControl()) {
++        fputs((line.simplified() + "\n").toUtf8().constData(), stdout);
++        fflush(stdout);
++    }
++}
++
++static void solinearStartReader()
++{
++    static std::once_flag once;
++    std::call_once(once, [] {
++        std::thread([] {
++            std::string line;
++            while (std::getline(std::cin, line)) {
++                SDL_Event event = {};
++                event.type = SDL_USEREVENT;
++                event.user.code = SDL_CODE_SOLINEAR_COMMAND;
++                event.user.data1 = new std::string(line);
++                SDL_PushEvent(&event);
++            }
++        }).detach();  // ends with the process; stdin closes when the launcher goes away
++    });
++}
+ 
+ #include <openssl/rand.h>
+ 
+@@ -72,6 +111,7 @@ void Session::clStageStarting(int stage)
+     // which happens to be the main thread, so it's cool to interact
+     // with the GUI in these callbacks.
+     emit s_ActiveSession->stageStarting(QString::fromLocal8Bit(LiGetStageName(stage)));
++    solinearStatus(QString("stage ") + LiGetStageName(stage));
+ }
+ 
+ void Session::clStageFailed(int stage, int errorCode)
+@@ -586,6 +626,33 @@ Session::Session(NvComputer* computer, NvApp& app, StreamingPreferences *prefere
+       m_AudioSampleCount(0),
+       m_DropAudioEndTime(0)
+ {
++    if (solinearControl()) {
++        connect(this, &Session::displayLaunchError, this, [](QString text) { solinearStatus("error " + text); });
++        connect(this, &Session::stageFailed, this, [](QString stage, int code, QString) {
++            solinearStatus(QString("error %1 failed (%2)").arg(stage).arg(code));
++        });
++    }
++}
++
++void Session::handleSolinearCommand(const QString& line)
++{
++    const QStringList words = line.simplified().split(' ', Qt::SkipEmptyParts);
++    const QString cmd = words.value(0), arg = words.value(1);
++    bool ok = false;
++    if (cmd == "combo") {
++        ok = m_InputHandler->performNamedCombo(arg);
++    }
++    else if (cmd == "screen") {
++        int n = arg.toInt(&ok);
++        ok = ok && n >= 1 && n <= 12;
++        if (ok) {
++            m_InputHandler->sendHostShortcut(0x70 + n - 1);  // VK_F1 + n - 1
++        }
++    }
++    else if (cmd == "quit") {
++        ok = m_InputHandler->performNamedCombo("quit");
++    }
++    solinearStatus((ok ? "ok " : "unknown ") + line);
+ }
+ 
+ Session::~Session()
+@@ -1960,6 +2027,11 @@ void Session::exec()
+     // Switch to async logging mode when we enter the SDL loop
+     StreamUtils::enterAsyncLoggingMode();
+ 
++    if (solinearControl()) {
++        solinearStartReader();
++        solinearStatus("connected");
++    }
++
+     // Hijack this thread to be the SDL main thread. We have to do this
+     // because we want to suspend all Qt processing until the stream is over.
+     SDL_Event event;
+@@ -2036,6 +2108,12 @@ void Session::exec()
+                 m_InputHandler->setAdaptiveTriggers((uint16_t)(uintptr_t)event.user.data1,
+                                                     (DualSenseOutputReport *)event.user.data2);
+                 break;
++            case SDL_CODE_SOLINEAR_COMMAND:
++                {
++                    std::unique_ptr<std::string> line((std::string*)event.user.data1);
++                    handleSolinearCommand(QString::fromStdString(*line));
++                }
++                break;
+             default:
+                 SDL_assert(false);
+             }
+@@ -2372,6 +2450,8 @@ DispatchDeferredCleanup:
+ 
+     SDL_QuitSubSystem(SDL_INIT_VIDEO);
+ 
++    solinearStatus("ended");
++
+     // Cleanup can take a while, so dispatch it to a worker thread.
+     // When it is complete, it will release our s_ActiveSessionSemaphore
+     // reference.
+diff --git a/app/streaming/session.h b/app/streaming/session.h
+index 53ac9e0..67eb6bf 100644
+--- a/app/streaming/session.h
++++ b/app/streaming/session.h
+@@ -167,6 +167,9 @@ private:
+ 
+     void toggleFullscreen();
+ 
++    // Solinear: one control-channel command (see session.cpp)
++    void handleSolinearCommand(const QString& line);
++
+     void notifyMouseEmulationMode(bool enabled);
+ 
+     void updateOptimalWindowDisplayMode();
+-- 
+2.51.1.windows.1
+

@@ -8,7 +8,9 @@ use crate::store::{self, Cfg, MAC};
 use crate::quality;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::process::{Child, Command};
+use std::io::{BufRead, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 pub fn exe() -> PathBuf {
@@ -205,10 +207,65 @@ pub fn default_opts(cfg: &Cfg, screen: Option<&Screen>) -> Opts {
     }
 }
 
-pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<Child> {
+/// Our patched Moonlight's control channel (moonlight-patches/): commands on its stdin, status on its stdout.
+pub struct Ctl {
+    stdin: ChildStdin,
+    connected: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Ctl {
+    pub fn send(&mut self, line: &str) -> Result<(), String> {
+        writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).map_err(|e| format!("The stream isn't answering: {e}"))
+    }
+
+    /// Set once the stream is up (Moonlight's "connected" line).
+    pub fn connected(&self) -> Arc<(Mutex<bool>, Condvar)> {
+        self.connected.clone()
+    }
+}
+
+pub fn wait_connected(up: &(Mutex<bool>, Condvar), timeout: Duration) -> bool {
+    let g = up.0.lock().unwrap();
+    *up.1.wait_timeout_while(g, timeout, |up| !*up).unwrap().0
+}
+
+/// The toolbar's key (as for send_combo) as a control-channel command.
+pub fn ctl_command(key: &str) -> Option<String> {
+    let c = match key {
+        "x" => "combo fullscreen",
+        "m" => "combo mouse-mode",
+        "s" => "combo stats",
+        "z" => "combo ungrab",
+        "q" => "quit",
+        k => return f_index(k).map(|n| format!("screen {}", n + 1)),
+    };
+    Some(c.into())
+}
+
+/// The stream, plus its control channel where Moonlight is our patched build (Windows; the Mac still uses
+/// the installed stock Moonlight.app, driven by simulated key presses).
+pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<(Child, Option<Ctl>)> {
     let kbps = quality::bitrate_kbps(o.size.0, o.size.1, o.fps, direct, &o.quality);
     let flags = quality::flags(o.size.0, o.size.1, o.fps, kbps, &o.display_mode, o.reverse_scroll, o.hdr);
-    command(&stream_args(addr, flags)).spawn()
+    let mut c = command(&stream_args(addr, flags));
+    if MAC {
+        return Ok((c.spawn()?, None));
+    }
+    // stderr stays as is: Moonlight then keeps writing its log file
+    let mut child = c.env("SOLINEAR_CONTROL", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+    let stdin = child.stdin.take().expect("piped");
+    let out = child.stdout.take().expect("piped");
+    let connected = Arc::new((Mutex::new(false), Condvar::new()));
+    let up = connected.clone();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            if line == "connected" {
+                *up.0.lock().unwrap() = true;
+                up.1.notify_all();
+            }
+        }
+    });
+    Ok((child, Some(Ctl { stdin, connected })))
 }
 
 /// True once the stream started by now (`since`) shows video, per Moonlight's log in our folder.
@@ -328,6 +385,15 @@ mod tests {
                    "[General]\nmdns=false\nwidth=1920\n[hosts]\n1\\hostname=Ren\n1\\localaddress=\n1\\remoteaddress=\n1\\manualaddress=::1\n");
         assert_eq!(only_given_addresses(""), "[General]\nmdns=false\n");
         assert_eq!(only_given_addresses("[General]\nx=1"), "[General]\nmdns=false\nx=1\n");
+    }
+
+    #[test]
+    fn toolbar_keys_as_control_commands() {
+        assert_eq!(ctl_command("x").as_deref(), Some("combo fullscreen"));
+        assert_eq!(ctl_command("q").as_deref(), Some("quit"));
+        assert_eq!(ctl_command("f2").as_deref(), Some("screen 2"));
+        assert_eq!(ctl_command("f13"), None);
+        assert_eq!(ctl_command("nope"), None);
     }
 
     #[test]

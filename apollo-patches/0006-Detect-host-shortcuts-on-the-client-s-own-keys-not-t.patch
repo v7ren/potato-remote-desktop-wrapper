@@ -1,0 +1,37 @@
+From 038cbfe34ca2cd82545fb6264a6e7e2d92f11756 Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 02:26:15 +0800
+Subject: [PATCH 6/6] Detect host shortcuts on the client's own keys, not their
+ remap
+
+With a Mac client's Ctrl remapped to Win, Ctrl+Alt+Shift+F<n> (switch display) and the other host
+shortcuts never fired.
+---
+ src/input.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/input.cpp b/src/input.cpp
+index e61df40..3219b9f 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -811,7 +811,7 @@ namespace input {
+         // this key was standing in for a combo's replacement: release that instead
+         platf::keyboard_update(platf_input, it->second, true, packet->flags);
+         combo_override.erase(it);
+-        update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
++        update_shortcutFlags(&input->shortcutFlags, keyCode, release);  // Solinear: the keys the client pressed, not their remap
+         return;
+       }
+     } else {
+@@ -821,7 +821,7 @@ namespace input {
+ 
+     send_key_and_modifiers(keyCode, release, packet->flags, synthetic_modifiers);
+ 
+-    update_shortcutFlags(&input->shortcutFlags, map_keycode(keyCode), release);
++    update_shortcutFlags(&input->shortcutFlags, keyCode, release);  // Solinear: the keys the client pressed, not their remap
+   }
+ 
+   /**
+-- 
+2.51.1.windows.1
+

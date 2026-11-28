@@ -26,6 +26,8 @@ struct Session {
     current_screen: String,
     opts: Opts,
     child: Child,
+    /// Patched Moonlight's control channel; None for the Mac's stock Moonlight.app.
+    ctl: Option<moonlight::Ctl>,
 }
 
 pub struct App {
@@ -402,11 +404,11 @@ impl App {
             let _ = old.child.kill();
         }
         let started = std::time::SystemTime::now();
-        let child = moonlight::stream(&addr, &opts, direct).map_err(err)?;
+        let (child, ctl) = moonlight::stream(&addr, &opts, direct).map_err(err)?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         *slot = Some(Session {
             id, ip, addr, name, os: info["os"].as_str().unwrap_or("windows").into(), screens,
-            current_screen: chosen.map(|c| c.id).unwrap_or_default(), opts, child,
+            current_screen: chosen.map(|c| c.id).unwrap_or_default(), opts, child, ctl,
         });
         drop(slot);
         if let Some(n) = live {
@@ -414,6 +416,19 @@ impl App {
             // Windows' usual monitor order); upgrade the host to the new app for exact ids
             let app = self.clone();
             std::thread::spawn(move || {
+                let up = match app.session.lock().unwrap().as_ref() {
+                    Some(s) if s.id == id => s.ctl.as_ref().map(|c| c.connected()),
+                    _ => return,
+                };
+                if let Some(up) = up {
+                    // straight into the stream once it's up: no key presses, no window focus
+                    if moonlight::wait_connected(&up, Duration::from_secs(60)) {
+                        if let Some(s) = app.session.lock().unwrap().as_mut().filter(|s| s.id == id) {
+                            let _ = s.ctl.as_mut().map(|c| c.send(&format!("screen {}", n + 1)));
+                        }
+                    }
+                    return;
+                }
                 // keys pressed before the video arrives are lost: wait for it (about 5s, longer while pairing)
                 if !moonlight::wait_until_streaming(started, Duration::from_secs(60)) {
                     return;
@@ -467,8 +482,10 @@ impl App {
     }
 
     pub fn toolbar_combo(self: &Arc<Self>, key: String) -> R {
-        let pid = self.with_session(|s| Ok(s.child.id()))?;
-        moonlight::send_combo(pid, &key)?;
+        self.with_session(|s| match s.ctl.as_mut() {
+            Some(c) => c.send(&moonlight::ctl_command(&key).ok_or("unknown key")?),
+            None => moonlight::send_combo(s.child.id(), &key),
+        })?;
         Ok(json!({"ok": true}))
     }
 
@@ -477,7 +494,7 @@ impl App {
         let _ = s.child.kill();
         let _ = s.child.wait();
         let direct = self.net.ping(&s.ip).map(|p| p.0).unwrap_or(false);
-        s.child = moonlight::stream(&s.addr, &s.opts, direct).map_err(err)?;
+        (s.child, s.ctl) = moonlight::stream(&s.addr, &s.opts, direct).map_err(err)?;
         Ok(())
     }
 
@@ -510,7 +527,10 @@ impl App {
         if let (Some(cur), Some(n)) = (cur, slot) {
             // older hosts (no /screen) can only switch live, whatever the size
             if cur.id != id && ((cur.w, cur.h) == (screen.w, screen.h) || screens::live_only(&id)) {
-                moonlight::send_combo(s.child.id(), &format!("f{}", n + 1))?;
+                match s.ctl.as_mut() {
+                    Some(c) => c.send(&format!("screen {}", n + 1))?,
+                    None => moonlight::send_combo(s.child.id(), &format!("f{}", n + 1))?,
+                }
                 s.current_screen = id;
                 return Ok(Self::info_of(s));
             }
