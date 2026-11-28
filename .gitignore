@@ -5,3 +5,4 @@ dist/
 *.spec
 bin/
 *.log
+app/helper/*.exe

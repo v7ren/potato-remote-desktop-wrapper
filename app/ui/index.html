@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solinear</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></symbol>
+  <symbol id="i-win" viewBox="0 0 24 24"><path d="M3 5.5l7.5-1v7H3zM12 4.3L21 3v8.5h-9zM3 12.5h7.5v7L3 18.5zM12 12.5h9V21l-9-1.3z"/></symbol>
+  <symbol id="i-mac" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 3l10 18H2zM12 10v5M12 18h.01"/></symbol>
+  <symbol id="i-empty" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M9 8.5l6 3M15 8.5l-6 3"/></symbol>
+</svg>
+
+<!-- sign in / missing prerequisites -->
+<div class="center" id="welcome" hidden>
+  <div class="hero">
+    <div class="logo"><svg><use href="#i-logo"/></svg></div>
+    <h1>Solinear</h1>
+    <p id="welcomeText">Stream your PCs anywhere. Sign in once, then use the same account on every device.</p>
+    <button class="btn" id="signinBtn">Sign in</button>
+    <p class="hint dim" id="signinHint" hidden></p>
+  </div>
+</div>
+
+<!-- main -->
+<div id="app" hidden>
+  <header>
+    <div class="brand"><div class="logo"><svg><use href="#i-logo"/></svg></div>Solinear</div>
+    <div class="spacer"></div>
+    <div class="account"><b id="acct"></b><button id="switchBtn">Switch account</button></div>
+    <button class="icon-btn" id="settingsBtn" aria-label="Settings" aria-haspopup="dialog"><svg><use href="#i-gear"/></svg></button>
+  </header>
+  <main>
+    <div class="host-row" id="hostRow">
+      <div class="grow"><b id="hostTitle">Stream this PC</b><small id="hostSub"></small><div class="note dim" id="hostNote" hidden></div></div>
+      <button class="switch" id="hostSwitch" role="switch" aria-checked="false" aria-labelledby="hostTitle"></button>
+    </div>
+    <h2>Your PCs</h2>
+    <div id="hosts" class="grid" aria-live="polite"></div>
+  </main>
+</div>
+
+<!-- settings -->
+<div id="scrim"></div>
+<aside id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <header>
+    <h3 id="sheetTitle">Settings</h3>
+    <button class="icon-btn" id="closeSheet" aria-label="Close settings"><svg><use href="#i-x"/></svg></button>
+  </header>
+  <div class="sheet-body">
+    <label class="field"><span>Quality</span>
+      <select id="quality" class="setting">
+        <option value="auto">Auto</option><option value="smoother">Smoother</option><option value="sharper">Sharper</option>
+      </select></label>
+    <label class="field"><span>Window</span>
+      <select id="display_mode" class="setting">
+        <option value="borderless">Borderless fullscreen</option><option value="fullscreen">Fullscreen</option><option value="windowed">Windowed</option>
+      </select></label>
+    <div class="toggle"><div id="l_rs">Reverse scroll wheel</div><button class="switch setting" id="reverse_scroll" role="switch" aria-checked="false" aria-labelledby="l_rs"></button></div>
+    <div class="toggle"><div id="l_mk">Match my keyboard's shortcuts<small>On a Mac streaming a Windows PC, Cmd works as Ctrl (Cmd+C copies) and Option+Tab switches apps. On a Windows PC streaming a Mac, Ctrl works as Cmd.</small></div><button class="switch setting" id="match_keys" role="switch" aria-checked="false" aria-labelledby="l_mk"></button></div>
+    <div class="keys"><p><b id="mod">Ctrl+Alt+Shift</b> plus:</p>
+      <p>X: switch fullscreen / window</p><p>F1 to F12: show host screen 1 to 12</p><p>S: stats · Z: release mouse · M: gaming mode · Q: quit</p></div>
+  </div>
+</aside>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+
+<script>if (!window.__TAURI__) document.write('<script src="mock.js"><\/script>');</script>
+<script src="app.js"></script>
+</body>
+</html>
