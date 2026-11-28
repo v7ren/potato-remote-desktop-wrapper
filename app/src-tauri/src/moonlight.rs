@@ -15,11 +15,23 @@ use std::time::{Duration, Instant};
 
 pub fn exe() -> PathBuf {
     if MAC {
-        // shortcut: Mac uses the installed Moonlight.app and shares its settings; bundle it inside Solinear.app later
-        PathBuf::from("/Applications/Moonlight.app/Contents/MacOS/Moonlight")
+        bundled_mac().unwrap_or_else(|| PathBuf::from("/Applications/Moonlight.app/Contents/MacOS/Moonlight"))
     } else {
         store::bin().join("moonlight/Moonlight.exe")
     }
+}
+
+/// Our patched Moonlight inside Solinear.app (Contents/Resources/Moonlight.app, see the Mac CI build).
+fn bundled_mac() -> Option<PathBuf> {
+    let me = std::env::current_exe().ok()?; // Solinear.app/Contents/MacOS/solinear
+    let p = me.parent()?.parent()?.join("Resources/Moonlight.app/Contents/MacOS/Moonlight");
+    p.exists().then_some(p)
+}
+
+/// Our patched build, with the control channel: always on Windows (bin/moonlight); on the Mac only when
+/// bundled (a stock /Applications/Moonlight.app has none, and gets simulated key presses instead).
+fn patched() -> bool {
+    !MAC || bundled_mac().is_some()
 }
 
 /// Portable mode keeps its settings in the cwd: our own folder, so pairings and learned addresses aren't shared
@@ -248,7 +260,7 @@ pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<(Child, Opt
     let kbps = quality::bitrate_kbps(o.size.0, o.size.1, o.fps, direct, &o.quality);
     let flags = quality::flags(o.size.0, o.size.1, o.fps, kbps, &o.display_mode, o.reverse_scroll, o.hdr);
     let mut c = command(&stream_args(addr, flags));
-    if MAC {
+    if !patched() {
         return Ok((c.spawn()?, None));
     }
     // stderr stays as is: Moonlight then keeps writing its log file

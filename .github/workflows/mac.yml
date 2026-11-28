@@ -3,11 +3,44 @@ name: Mac app
 on:
   push:
     branches: [rust-rewrite]
-    paths: ["app/**", ".github/workflows/mac.yml"]
+    paths: ["app/**", "moonlight-patches/**", ".github/workflows/mac.yml"]
   workflow_dispatch:
 
 jobs:
+  moonlight:
+    # our patched Moonlight (moonlight-patches/), bundled inside Solinear.app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Moonlight 6.2.0 source + our patches
+        run: |
+          git clone --depth 1 --branch v6.2.0 --recurse-submodules --shallow-submodules https://github.com/moonlight-stream/moonlight-qt.git ml
+          cd ml && git -c user.name=ci -c user.email=ci@localhost am ../moonlight-patches/*.patch
+          python3 setup-deps.py
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          cache: true
+          version: 6.11.2
+          aqtsource: 'git+https://github.com/miurahr/aqtinstall.git@073e34d7c2ab4ae6961ed7cca690b3abd5ba5a7e'
+
+      - name: Build Moonlight.app (universal)
+        run: |
+          mkdir build && cd build
+          qmake ../ml/moonlight-qt.pro QMAKE_APPLE_DEVICE_ARCHS="x86_64 arm64"
+          make -j$(sysctl -n hw.logicalcpu) release
+          macdeployqt app/Moonlight.app -qmldir=../ml/app/gui -appstore-compliant
+          find app/Moonlight.app -name '*.dSYM' | xargs rm -rf
+          ditto -c -k --keepParent app/Moonlight.app ../Moonlight-mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Moonlight-mac
+          path: Moonlight-mac.zip
+
   build:
+    needs: moonlight
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,10 +78,15 @@ jobs:
         working-directory: app
         run: npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app
 
-      - name: Add the helper and sign ad hoc
+      - uses: actions/download-artifact@v4
+        with:
+          name: Moonlight-mac
+
+      - name: Add the helper and Moonlight, sign ad hoc
         run: |
           APP=app/src-tauri/target/universal-apple-darwin/release/bundle/macos/Solinear.app
           cp app/helper/solinear-net "$APP/Contents/MacOS/solinear-net"  # found next to the app's binary
+          ditto -x -k Moonlight-mac.zip "$APP/Contents/Resources/"        # moonlight.rs looks here first
           codesign --force --deep --sign - "$APP"
           ditto -c -k --keepParent "$APP" Solinear-mac.zip
 
