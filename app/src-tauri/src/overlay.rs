@@ -11,6 +11,8 @@ use std::time::Duration;
 use tauri::{LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub const ENV: &str = "SOLINEAR_CTL";
+/// Set: just the menu (opened from the in-stream toolbar's MORE), no pill; the process ends with the menu.
+pub const MENU_ENV: &str = "SOLINEAR_MENU";
 const PILL: (f64, f64) = (245.0, 50.0);
 
 struct Ctl {
@@ -30,6 +32,10 @@ fn forward(c: &Ctl, name: &str, args: &Value) -> Result<Value, String> {
 /// What toolbar.js invokes for every command. Window commands are handled here, the rest go to the main app.
 #[tauri::command(rename_all = "snake_case")]
 async fn fwd(win: tauri::WebviewWindow, ctl: tauri::State<'_, Ctl>, name: String, args: Value) -> Result<Value, String> {
+    if name == "toolbar_quit" {
+        win.app_handle().exit(0);
+        return Ok(json!({"ok": true}));
+    }
     if name == "toolbar_resize" {
         let (w, h) = (args["w"].as_f64().unwrap_or(PILL.0), args["h"].as_f64().unwrap_or(PILL.1));
         let top_left = win.outer_position().map_err(|e| e.to_string())?; // macOS grows a window from its bottom-left
@@ -81,7 +87,9 @@ pub fn run() {
                 None => app.primary_monitor().ok().flatten()
                     .map(|m| ((m.size().width as f64 / m.scale_factor() - PILL.0) / 2.0, 8.0)).unwrap_or((400.0, 8.0)),
             };
+            let menu_only = std::env::var(MENU_ENV).is_ok();
             let win = WebviewWindowBuilder::new(app, "toolbar", WebviewUrl::App("toolbar.html".into()))
+                .initialization_script(if menu_only { "window.__SOLINEAR_MENU = true;" } else { "" })
                 .title("Solinear toolbar").inner_size(PILL.0, PILL.1).position(x, y)
                 .decorations(false).transparent(true).shadow(false).always_on_top(true).skip_taskbar(true).resizable(false)
                 .focused(false).build()?;

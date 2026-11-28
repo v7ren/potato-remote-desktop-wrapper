@@ -62,7 +62,8 @@ const views = {
 // ---- menu rendering ----
 function push(v) { stack.push(typeof v === "function" ? v() : v); render(); }
 function pop() { stack.pop(); stack.length ? render() : closeMenu(); }
-function closeMenu() { stack = []; $("panel").hidden = true; $("menuBtn").setAttribute("aria-expanded", "false"); fit(); $("menuBtn").focus(); }
+const MENU_ONLY = !!window.__SOLINEAR_MENU;  // opened from the in-stream toolbar's MORE: no pill, gone with the menu
+function closeMenu() { if (MENU_ONLY) return call("toolbar_quit"); stack = []; $("panel").hidden = true; $("menuBtn").setAttribute("aria-expanded", "false"); fit(); $("menuBtn").focus(); }
 function openMenu() { stack = [views.root()]; $("menuBtn").setAttribute("aria-expanded", "true"); render(); }
 
 function render() {
@@ -140,4 +141,5 @@ $("pill").addEventListener("pointerup", (e) => { if (e.target === $("pill")) cal
   try { info = await invoke("toolbar_info"); } catch (e) { console.error(e); }
   opts = { ...(info.opts || {}) };
   paintScreens();
+  if (MENU_ONLY) { $("pill").hidden = true; openMenu(); }
 })();

@@ -1,0 +1,30 @@
+From 0ad22ae01822ef941398f8fcb8f5fdb9117728f5 Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 03:12:36 +0800
+Subject: [PATCH 3/3] Log in-stream toolbar clicks (diagnostics)
+
+---
+ app/streaming/session.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+index d5d2a19..415a081 100644
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -754,10 +754,13 @@ bool Session::solinearToolbarMouse(const SDL_Event* event)
+     case SDL_MOUSEBUTTONDOWN:
+         {
+             if (!m_ToolbarShown) {
++                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Toolbar click ignored: toolbar hidden");
+                 return false;
+             }
+             QPoint p = toPixels(event->button.x, event->button.y);
+             int button = m_OverlayManager.toolbarButtonAt(p.x() - barX, p.y());
++            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Toolbar click: window %dx%d pixels %dx%d at %d,%d -> %d,%d bar x %d size %dx%d -> button %d",
++                        ww, wh, pw, ph, event->button.x, event->button.y, p.x(), p.y(), barX, bar.width(), bar.height(), button);
+             if (button < 0) {
+                 return false;
+             }
+-- 
+2.51.1.windows.1
+

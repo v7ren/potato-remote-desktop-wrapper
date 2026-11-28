@@ -195,14 +195,43 @@ impl App {
         }).clone()
     }
 
-    fn spawn_overlay(self: &Arc<Self>) {
+    /// What a patched Moonlight reports about stream `id` (moonlight-patches/README.md).
+    fn line_handler(self: &Arc<Self>, id: u64) -> moonlight::OnLine {
+        let app = self.clone();
+        Arc::new(move |line: &str| app.on_stream_line(id, line))
+    }
+
+    fn on_stream_line(self: &Arc<Self>, id: u64, line: &str) {
+        if line == "toolbar more" {
+            return self.spawn_overlay(true); // the full menu (quality, resolution, host actions)
+        }
+        let mut g = self.session.lock().unwrap();
+        let Some(s) = g.as_mut().filter(|s| s.id == id) else { return };
+        if line == "connected" {
+            // the in-stream toolbar: one button per host screen, the current one lit
+            let cur = s.screens.iter().position(|x| x.id == s.current_screen).map_or(1, |n| n + 1);
+            let cmd = format!("toolbar {} {cur}", s.screens.len().min(12));
+            let _ = s.ctl.as_mut().map(|c| c.send(&cmd));
+        } else if let Some(n) = line.strip_prefix("toolbar screen ").and_then(|n| n.parse::<usize>().ok()) {
+            if let Some(x) = n.checked_sub(1).and_then(|i| s.screens.get(i)) {
+                s.current_screen = x.id.clone(); // switched from the in-stream toolbar
+            }
+        }
+    }
+
+    fn spawn_overlay(self: &Arc<Self>, menu_only: bool) {
         let (port, token) = self.ctl_start();
         let Ok(exe) = std::env::current_exe() else { return };
         let mut slot = self.overlay.lock().unwrap();
         if let Some(mut old) = slot.take() {
             let _ = old.kill(); // a new stream: the toolbar must show the new session
         }
-        *slot = Command::new(exe).arg("--overlay").env(crate::overlay::ENV, format!("{port}:{token}")).spawn().ok();
+        let mut c = Command::new(exe);
+        c.arg("--overlay").env(crate::overlay::ENV, format!("{port}:{token}"));
+        if menu_only {
+            c.env(crate::overlay::MENU_ENV, "1");
+        }
+        *slot = c.spawn().ok();
     }
 
     /// The toolbar's commands (CONTRACT.md), by name, as forwarded from the toolbar process.
@@ -404,8 +433,9 @@ impl App {
             let _ = old.child.kill();
         }
         let started = std::time::SystemTime::now();
-        let (child, ctl) = moonlight::stream(&addr, &opts, direct).map_err(err)?;
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (child, ctl) = moonlight::stream(&addr, &opts, direct, self.line_handler(id)).map_err(err)?;
+        let in_stream_toolbar = ctl.is_some();
         *slot = Some(Session {
             id, ip, addr, name, os: info["os"].as_str().unwrap_or("windows").into(), screens,
             current_screen: chosen.map(|c| c.id).unwrap_or_default(), opts, child, ctl,
@@ -445,7 +475,9 @@ impl App {
                 }
             });
         }
-        self.spawn_overlay();
+        if !in_stream_toolbar {
+            self.spawn_overlay(false); // stock Moonlight: the floating toolbar window
+        }
         let app = self.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(1));
@@ -490,11 +522,11 @@ impl App {
     }
 
     /// Restart the stream with the session's (already updated) options.
-    fn respawn(&self, s: &mut Session) -> Result<(), String> {
+    fn respawn(self: &Arc<Self>, s: &mut Session) -> Result<(), String> {
         let _ = s.child.kill();
         let _ = s.child.wait();
         let direct = self.net.ping(&s.ip).map(|p| p.0).unwrap_or(false);
-        (s.child, s.ctl) = moonlight::stream(&s.addr, &s.opts, direct).map_err(err)?;
+        (s.child, s.ctl) = moonlight::stream(&s.addr, &s.opts, direct, self.line_handler(s.id)).map_err(err)?;
         Ok(())
     }
 

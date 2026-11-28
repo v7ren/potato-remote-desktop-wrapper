@@ -256,7 +256,10 @@ pub fn ctl_command(key: &str) -> Option<String> {
 
 /// The stream, plus its control channel where Moonlight is our patched build (Windows; the Mac still uses
 /// the installed stock Moonlight.app, driven by simulated key presses).
-pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<(Child, Option<Ctl>)> {
+/// Gets each status line of a patched Moonlight's stream (see moonlight-patches/README.md).
+pub type OnLine = Arc<dyn Fn(&str) + Send + Sync>;
+
+pub fn stream(addr: &str, o: &Opts, direct: bool, on_line: OnLine) -> std::io::Result<(Child, Option<Ctl>)> {
     let kbps = quality::bitrate_kbps(o.size.0, o.size.1, o.fps, direct, &o.quality);
     let flags = quality::flags(o.size.0, o.size.1, o.fps, kbps, &o.display_mode, o.reverse_scroll, o.hdr);
     let mut c = command(&stream_args(addr, flags));
@@ -275,6 +278,7 @@ pub fn stream(addr: &str, o: &Opts, direct: bool) -> std::io::Result<(Child, Opt
                 *up.0.lock().unwrap() = true;
                 up.1.notify_all();
             }
+            on_line(&line);
         }
     });
     Ok((child, Some(Ctl { stdin, connected })))

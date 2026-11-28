@@ -1,0 +1,466 @@
+From 499db40ef41544f8e8e8b68d210af7e254a9ae3d Mon Sep 17 00:00:00 2001
+From: "v7r.envy" <noreply@example.invalid>
+Date: Sun, 29 Nov 2026 03:02:39 +0800
+Subject: [PATCH 2/3] Solinear in-stream toolbar
+
+A third overlay (top-centre): host screen buttons, FULL, GAME, MORE, END. Configured with the control
+command 'toolbar <screens> <current>'; shown when the pointer reaches the top edge, hidden 2.5 s
+after it leaves; clicks on it never reach the host and are reported as 'toolbar <action>' lines.
+---
+ app/streaming/input/input.h                   |   3 +
+ app/streaming/session.cpp                     | 131 +++++++++++++++++-
+ app/streaming/session.h                       |  10 ++
+ .../video/ffmpeg-renderers/d3d11va.cpp        |   5 +
+ .../video/ffmpeg-renderers/dxva2.cpp          |   5 +
+ app/streaming/video/ffmpeg-renderers/plvk.cpp |   5 +
+ .../video/ffmpeg-renderers/sdlvid.cpp         |   7 +
+ .../video/ffmpeg-renderers/vt_metal.mm        |   5 +
+ app/streaming/video/overlaymanager.cpp        |  80 ++++++++++-
+ app/streaming/video/overlaymanager.h          |  18 +++
+ 10 files changed, 267 insertions(+), 2 deletions(-)
+
+diff --git a/app/streaming/input/input.h b/app/streaming/input/input.h
+index 6c3422a..1c602b5 100644
+--- a/app/streaming/input/input.h
++++ b/app/streaming/input/input.h
+@@ -159,6 +159,9 @@ public:
+     // "mouse-mode", "ungrab", "minimize", "paste"). False if the name is unknown.
+     bool performNamedCombo(const QString& name);
+ 
++    // Solinear: true in Moonlight's "gaming" (relative) mouse mode
++    bool isRelativeMouseMode() { return !m_AbsoluteMouseMode; }
++
+     // Solinear: press Ctrl+Alt+Shift+<vk> on the host (e.g. F2 = Sunshine/Apollo's "show display 2").
+     void sendHostShortcut(short vk);
+ 
+diff --git a/app/streaming/session.cpp b/app/streaming/session.cpp
+index 34e439b..d5d2a19 100644
+--- a/app/streaming/session.cpp
++++ b/app/streaming/session.cpp
+@@ -71,6 +71,7 @@ static void solinearStartReader()
+ #include <openssl/rand.h>
+ 
+ #include <QtEndian>
++#include <QPoint>
+ #include <QCoreApplication>
+ #include <QThreadPool>
+ #include <QSvgRenderer>
+@@ -652,9 +653,129 @@ void Session::handleSolinearCommand(const QString& line)
+     else if (cmd == "quit") {
+         ok = m_InputHandler->performNamedCombo("quit");
+     }
++    else if (cmd == "toolbar") {
++        // "toolbar <host screens> <current screen>"
++        int screens = arg.toInt(&ok), current = words.value(2).toInt();
++        if (ok && screens >= 0 && screens <= 12) {
++            m_ToolbarScreens = screens;
++            m_ToolbarScreen = SDL_clamp(current, 1, SDL_max(screens, 1));
++            solinearToolbarRefresh();
++        }
++        else {
++            ok = false;
++        }
++    }
++    if (ok && cmd == "screen") {
++        m_ToolbarScreen = arg.toInt();
++        solinearToolbarRefresh();
++    }
+     solinearStatus((ok ? "ok " : "unknown ") + line);
+ }
+ 
++void Session::solinearToolbarRefresh()
++{
++    if (m_ToolbarScreens < 0 || !m_ToolbarShown) {
++        m_OverlayManager.setToolbar({}, {});
++        return;
++    }
++    QStringList labels;
++    QVector<bool> lit;
++    for (int i = 1; m_ToolbarScreens > 1 && i <= m_ToolbarScreens; i++) {
++        labels << QString::number(i);
++        lit << (i == m_ToolbarScreen);
++    }
++    labels << "FULL" << "GAME" << "MORE" << "END";
++    lit << false << m_InputHandler->isRelativeMouseMode() << false << false;
++    m_OverlayManager.setToolbar(labels, lit);
++}
++
++void Session::solinearToolbarAction(int button)
++{
++    const int screens = m_ToolbarScreens > 1 ? m_ToolbarScreens : 0;
++    if (button < screens) {
++        m_ToolbarScreen = button + 1;
++        m_InputHandler->sendHostShortcut(0x70 + button);  // VK_F1 + n
++        solinearStatus(QString("toolbar screen %1").arg(button + 1));
++    }
++    else {
++        switch (button - screens) {
++        case 0:
++            m_InputHandler->performNamedCombo("fullscreen");
++            solinearStatus("toolbar fullscreen");
++            break;
++        case 1:
++            m_InputHandler->performNamedCombo("mouse-mode");
++            solinearStatus(m_InputHandler->isRelativeMouseMode() ? "toolbar game on" : "toolbar game off");
++            break;
++        case 2:
++            solinearStatus("toolbar more");  // the launcher shows its full menu
++            break;
++        case 3:
++            m_InputHandler->performNamedCombo("quit");
++            break;
++        }
++    }
++    m_ToolbarHideAt = SDL_GetTicks() + 2500;
++    solinearToolbarRefresh();
++}
++
++bool Session::solinearToolbarMouse(const SDL_Event* event)
++{
++    if (m_ToolbarScreens < 0 || m_Window == nullptr) {
++        return false;
++    }
++    int ww, wh, pw, ph;
++    SDL_GetWindowSize(m_Window, &ww, &wh);
++    SDL_GetWindowSizeInPixels(m_Window, &pw, &ph);
++    if (ww <= 0 || wh <= 0) {
++        return false;
++    }
++    const QSize bar = m_OverlayManager.toolbarSize();
++    const int barX = (pw - bar.width()) / 2;
++    auto toPixels = [&](int x, int y) { return QPoint(x * pw / ww, y * ph / wh); };
++
++    switch (event->type) {
++    case SDL_MOUSEMOTION:
++        {
++            if (SDL_GetRelativeMouseMode()) {
++                return false;  // gaming mode: no pointer to hover with (Ctrl+Alt+Shift+Z frees it)
++            }
++            QPoint p = toPixels(event->motion.x, event->motion.y);
++            bool overBar = m_ToolbarShown && p.y() < bar.height() && p.x() >= barX && p.x() < barX + bar.width();
++            if (p.y() < SDL_max(ph / 40, 6) || overBar) {
++                m_ToolbarHideAt = SDL_GetTicks() + 2500;
++                if (!m_ToolbarShown) {
++                    m_ToolbarShown = true;
++                    solinearToolbarRefresh();
++                }
++            }
++            return false;  // movement still reaches the host
++        }
++    case SDL_MOUSEBUTTONDOWN:
++        {
++            if (!m_ToolbarShown) {
++                return false;
++            }
++            QPoint p = toPixels(event->button.x, event->button.y);
++            int button = m_OverlayManager.toolbarButtonAt(p.x() - barX, p.y());
++            if (button < 0) {
++                return false;
++            }
++            m_ToolbarSwallowUp = true;
++            solinearToolbarAction(button);
++            return true;
++        }
++    case SDL_MOUSEBUTTONUP:
++        if (m_ToolbarSwallowUp) {
++            m_ToolbarSwallowUp = false;
++            return true;
++        }
++        return false;
++    default:
++        return false;
++    }
++}
++
+ Session::~Session()
+ {
+     // NB: This may not get destroyed for a long time! Don't put any non-trivial cleanup here.
+@@ -2036,6 +2157,11 @@ void Session::exec()
+     // because we want to suspend all Qt processing until the stream is over.
+     SDL_Event event;
+     for (;;) {
++        if (m_ToolbarShown && SDL_TICKS_PASSED(SDL_GetTicks(), m_ToolbarHideAt)) {
++            m_ToolbarShown = false;
++            solinearToolbarRefresh();
++        }
++
+ #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
+         // SDL 2.0.18 has a proper wait event implementation that uses platform
+         // support to block on events rather than polling on Windows, macOS, X11,
+@@ -2331,9 +2457,12 @@ void Session::exec()
+         case SDL_MOUSEBUTTONDOWN:
+         case SDL_MOUSEBUTTONUP:
+             presence.runCallbacks();
+-            m_InputHandler->handleMouseButtonEvent(&event.button);
++            if (!solinearToolbarMouse(&event)) {
++                m_InputHandler->handleMouseButtonEvent(&event.button);
++            }
+             break;
+         case SDL_MOUSEMOTION:
++            solinearToolbarMouse(&event);
+             m_InputHandler->handleMouseMotionEvent(&event.motion);
+             break;
+         case SDL_MOUSEWHEEL:
+diff --git a/app/streaming/session.h b/app/streaming/session.h
+index 67eb6bf..c2ea4e3 100644
+--- a/app/streaming/session.h
++++ b/app/streaming/session.h
+@@ -170,6 +170,16 @@ private:
+     // Solinear: one control-channel command (see session.cpp)
+     void handleSolinearCommand(const QString& line);
+ 
++    // Solinear in-stream toolbar: shown when the pointer reaches the top edge, clicks on it never reach the host
++    void solinearToolbarRefresh();
++    bool solinearToolbarMouse(const SDL_Event* event);
++    void solinearToolbarAction(int button);
++    int m_ToolbarScreens = -1;  // -1 = toolbar off (the launcher never configured it)
++    int m_ToolbarScreen = 1;
++    bool m_ToolbarShown = false;
++    bool m_ToolbarSwallowUp = false;
++    Uint32 m_ToolbarHideAt = 0;
++
+     void notifyMouseEmulationMode(bool enabled);
+ 
+     void updateOptimalWindowDisplayMode();
+diff --git a/app/streaming/video/ffmpeg-renderers/d3d11va.cpp b/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
+index fed027f..17d6a93 100644
+--- a/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
++++ b/app/streaming/video/ffmpeg-renderers/d3d11va.cpp
+@@ -1192,6 +1192,11 @@ bool D3D11VARenderer::createOverlayVertexBuffer(Overlay::OverlayType type, int w
+         renderRect.x = 0;
+         renderRect.y = m_DisplayHeight - height;
+     }
++    else if (type == Overlay::OverlayToolbar) {
++        // Top centre (Solinear)
++        renderRect.x = (m_DisplayWidth - width) / 2;
++        renderRect.y = m_DisplayHeight - height;
++    }
+ 
+     renderRect.w = width;
+     renderRect.h = height;
+diff --git a/app/streaming/video/ffmpeg-renderers/dxva2.cpp b/app/streaming/video/ffmpeg-renderers/dxva2.cpp
+index e438615..ad79b00 100644
+--- a/app/streaming/video/ffmpeg-renderers/dxva2.cpp
++++ b/app/streaming/video/ffmpeg-renderers/dxva2.cpp
+@@ -668,6 +668,11 @@ void DXVA2Renderer::notifyOverlayUpdated(Overlay::OverlayType type)
+         renderRect.x = 0;
+         renderRect.y = 0;
+     }
++    else if (type == Overlay::OverlayToolbar) {
++        // Top centre (Solinear)
++        renderRect.x = (m_DisplayWidth - newSurface->w) / 2;
++        renderRect.y = 0;
++    }
+ 
+     renderRect.w = newSurface->w;
+     renderRect.h = newSurface->h;
+diff --git a/app/streaming/video/ffmpeg-renderers/plvk.cpp b/app/streaming/video/ffmpeg-renderers/plvk.cpp
+index 3a7b2a1..9a4eb2d 100644
+--- a/app/streaming/video/ffmpeg-renderers/plvk.cpp
++++ b/app/streaming/video/ffmpeg-renderers/plvk.cpp
+@@ -1038,6 +1038,11 @@ void PlVkRenderer::renderFrame(AVFrame *frame)
+                 overlayParts[i].dst.x0 = 0;
+                 overlayParts[i].dst.y0 = 0;
+             }
++            else if (i == Overlay::OverlayToolbar) {
++                // Top centre (Solinear)
++                overlayParts[i].dst.x0 = SDL_max(0, (targetFrame.crop.x1 - overlayParts[i].src.x1) / 2);
++                overlayParts[i].dst.y0 = 0;
++            }
+             overlayParts[i].dst.x1 = overlayParts[i].dst.x0 + overlayParts[i].src.x1;
+             overlayParts[i].dst.y1 = overlayParts[i].dst.y0 + overlayParts[i].src.y1;
+ 
+diff --git a/app/streaming/video/ffmpeg-renderers/sdlvid.cpp b/app/streaming/video/ffmpeg-renderers/sdlvid.cpp
+index 1faf3c4..5365f21 100644
+--- a/app/streaming/video/ffmpeg-renderers/sdlvid.cpp
++++ b/app/streaming/video/ffmpeg-renderers/sdlvid.cpp
+@@ -246,6 +246,13 @@ void SdlRenderer::renderOverlay(Overlay::OverlayType type)
+                 m_OverlayRects[type].x = 0;
+                 m_OverlayRects[type].y = 0;
+             }
++            else if (type == Overlay::OverlayToolbar) {
++                // Top centre (Solinear)
++                SDL_Rect viewportRect;
++                SDL_RenderGetViewport(m_Renderer, &viewportRect);
++                m_OverlayRects[type].x = (viewportRect.w - newSurface->w) / 2;
++                m_OverlayRects[type].y = 0;
++            }
+ 
+             m_OverlayRects[type].w = newSurface->w;
+             m_OverlayRects[type].h = newSurface->h;
+diff --git a/app/streaming/video/ffmpeg-renderers/vt_metal.mm b/app/streaming/video/ffmpeg-renderers/vt_metal.mm
+index 2852d43..b8b6e8c 100644
+--- a/app/streaming/video/ffmpeg-renderers/vt_metal.mm
++++ b/app/streaming/video/ffmpeg-renderers/vt_metal.mm
+@@ -538,6 +538,11 @@ public:
+                     renderRect.x = 0;
+                     renderRect.y = m_LastDrawableHeight - overlayTexture.height;
+                 }
++                else if (i == Overlay::OverlayToolbar) {
++                    // Top centre (Solinear)
++                    renderRect.x = (m_LastDrawableWidth - (int)overlayTexture.width) / 2;
++                    renderRect.y = m_LastDrawableHeight - overlayTexture.height;
++                }
+ 
+                 renderRect.w = overlayTexture.width;
+                 renderRect.h = overlayTexture.height;
+diff --git a/app/streaming/video/overlaymanager.cpp b/app/streaming/video/overlaymanager.cpp
+index ab1da16..ac9e0b0 100644
+--- a/app/streaming/video/overlaymanager.cpp
++++ b/app/streaming/video/overlaymanager.cpp
+@@ -15,6 +15,9 @@ OverlayManager::OverlayManager() :
+     m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
+     m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
+ 
++    m_Overlays[OverlayType::OverlayToolbar].color = {0xF2, 0xF2, 0xF2, 0xFF};
++    m_Overlays[OverlayType::OverlayToolbar].fontSize = 22;
++
+     // While TTF will usually not be initialized here, it is valid for that not to
+     // be the case, since Session destruction is deferred and could overlap with
+     // the lifetime of a new Session object.
+@@ -148,13 +151,14 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
+     SDL_Surface* oldSurface = (SDL_Surface*)SDL_AtomicSetPtr(
+         (void**)&m_Overlays[type].surface,
+         m_Overlays[type].enabled ?
++            (type == OverlayToolbar ? renderToolbar(m_Overlays[type].font) :
+             // The _Wrapped variant is required for line breaks to work
+             RenderTextOutlinedWrapped(m_Overlays[type].font,
+                                       m_Overlays[type].text,
+                                       m_Overlays[type].color,
+                                       {0, 0, 0, 255},
+                                       4,
+-                                      1024)
++                                      1024))
+             : nullptr);
+ 
+     // Notify the renderer
+@@ -166,6 +170,80 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
+     }
+ }
+ 
++void OverlayManager::setToolbar(const QStringList& labels, const QVector<bool>& lit)
++{
++    m_ToolbarLabels = labels;
++    m_ToolbarLit = lit;
++    bool wasShown = m_Overlays[OverlayToolbar].enabled;
++    setOverlayState(OverlayToolbar, !labels.isEmpty());
++    if (wasShown && !labels.isEmpty()) {
++        notifyOverlayUpdated(OverlayToolbar);  // setOverlayState() only redraws on a show/hide change
++    }
++    if (labels.isEmpty()) {
++        m_ToolbarRanges.clear();
++        m_ToolbarSize = QSize();
++    }
++}
++
++int OverlayManager::toolbarButtonAt(int x, int y) const
++{
++    if (y < 0 || y >= m_ToolbarSize.height()) {
++        return -1;
++    }
++    for (int i = 0; i < m_ToolbarRanges.size(); i++) {
++        if (x >= m_ToolbarRanges[i].first && x < m_ToolbarRanges[i].second) {
++            return i;
++        }
++    }
++    return -1;
++}
++
++QSize OverlayManager::toolbarSize() const
++{
++    return m_ToolbarSize;
++}
++
++SDL_Surface* OverlayManager::renderToolbar(TTF_Font* font)
++{
++    const int padX = 16, padY = 8, gap = 6;
++    TTF_SetFontOutline(font, 0);
++    QVector<int> widths;
++    int total = gap;
++    for (const QString& label : m_ToolbarLabels) {
++        int w = 0, h = 0;
++        TTF_SizeUTF8(font, label.toUtf8().constData(), &w, &h);
++        widths.append(w + 2 * padX);
++        total += w + 2 * padX + gap;
++    }
++    const int buttonH = TTF_FontHeight(font) + 2 * padY;
++    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, total, buttonH + 2 * gap, 32, SDL_PIXELFORMAT_ARGB8888);
++    if (surface == nullptr) {
++        return nullptr;
++    }
++    SDL_FillRect(surface, nullptr, SDL_MapRGBA(surface->format, 12, 12, 12, 235));
++
++    m_ToolbarRanges.clear();
++    int x = gap;
++    for (int i = 0; i < m_ToolbarLabels.size(); i++) {
++        bool lit = m_ToolbarLit.value(i);
++        SDL_Rect button = {x, gap, widths[i], buttonH};
++        SDL_FillRect(surface, &button, lit ? SDL_MapRGBA(surface->format, 242, 242, 242, 255)
++                                           : SDL_MapRGBA(surface->format, 32, 32, 32, 255));
++        SDL_Color color = lit ? SDL_Color{5, 5, 5, 255} : SDL_Color{220, 220, 220, 255};
++        SDL_Surface* text = TTF_RenderUTF8_Blended(font, m_ToolbarLabels[i].toUtf8().constData(), color);
++        if (text != nullptr) {
++            SDL_Rect at = {x + padX, gap + padY, text->w, text->h};
++            SDL_SetSurfaceBlendMode(text, SDL_BLENDMODE_BLEND);
++            SDL_BlitSurface(text, nullptr, surface, &at);
++            SDL_FreeSurface(text);
++        }
++        m_ToolbarRanges.append({x, x + widths[i]});
++        x += widths[i] + gap;
++    }
++    m_ToolbarSize = QSize(surface->w, surface->h);
++    return surface;
++}
++
+ SDL_Surface* OverlayManager::RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth) {
+     if (text == nullptr || text[0] == '\0') {
+         return nullptr;
+diff --git a/app/streaming/video/overlaymanager.h b/app/streaming/video/overlaymanager.h
+index 8f8a60b..ae01065 100644
+--- a/app/streaming/video/overlaymanager.h
++++ b/app/streaming/video/overlaymanager.h
+@@ -1,6 +1,10 @@
+ #pragma once
+ 
+ #include <QString>
++#include <QPair>
++#include <QSize>
++#include <QStringList>
++#include <QVector>
+ 
+ #include "SDL_compat.h"
+ #include <SDL_ttf.h>
+@@ -10,6 +14,7 @@ namespace Overlay {
+ enum OverlayType {
+     OverlayDebug,
+     OverlayStatusUpdate,
++    OverlayToolbar,  // Solinear: in-stream toolbar, drawn top-centre
+     OverlayMax
+ };
+ 
+@@ -39,9 +44,22 @@ public:
+ 
+     void setOverlayRenderer(IOverlayRenderer* renderer);
+ 
++    // Solinear: show the toolbar overlay with these buttons (lit = drawn highlighted); empty = hide it.
++    // Main thread only, as are the two queries below.
++    void setToolbar(const QStringList& labels, const QVector<bool>& lit);
++    // The button under (x, y) in the toolbar's own pixels, or -1.
++    int toolbarButtonAt(int x, int y) const;
++    QSize toolbarSize() const;
++
+ private:
+     void notifyOverlayUpdated(OverlayType type);
+     SDL_Surface* RenderTextOutlinedWrapped(TTF_Font* font, const char* text, SDL_Color textColor, SDL_Color outlineColor, int outlineWidth, int wrapWidth);
++    SDL_Surface* renderToolbar(TTF_Font* font);
++
++    QStringList m_ToolbarLabels;
++    QVector<bool> m_ToolbarLit;
++    QVector<QPair<int, int>> m_ToolbarRanges;  // each button's [x0, x1) in the toolbar surface
++    QSize m_ToolbarSize;
+ 
+     struct {
+         bool enabled;
+-- 
+2.51.1.windows.1
+
